@@ -4,3 +4,6 @@ node_modules
 start.sh
 dist
 cache.json
+.next
+tsconfig.tsbuildinfo
+public/wasm/

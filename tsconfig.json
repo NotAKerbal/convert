@@ -1,24 +1,29 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "useDefineForClassFields": true,
     "module": "ESNext",
     "lib": [
       "ES2022",
       "DOM",
       "DOM.Iterable"
     ],
-    "types": [
-      "vite/client"
-    ],
-    "skipLibCheck": true,
-    /* Bundler mode */
+    "jsx": "preserve",
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,
     "allowJs": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "skipLibCheck": true,
     /* Linting */
     "strict": true,
     "noFallthroughCasesInSwitch": true,
@@ -26,8 +31,7 @@
     /* Temporary fix!!! This is only really a problem in dependencies. */
     /* Not sure how to best handle this in the long term, though. */
     "noUnusedLocals": false, /* SHOULD be true */
-    "noUnusedParameters": false, /* SHOULD be true */
-    /**
+    "noUnusedParameters": false, /* SHOULD be true *//**
      * The TS transpilation of the qoi-fu dependency isn't compabile with
      * our settings. They do provide a JS file, but tsc _really_ wants to
      * import the TS file instead. We define a custom path to steer it
@@ -35,13 +39,25 @@
      */
     "baseUrl": ".",
     "paths": {
-      "qoi-fu": ["./src/handlers/qoi-fu/transpiled/QOI.js"]
+      "qoi-fu": [
+        "./src/handlers/qoi-fu/transpiled/QOI.js"
+      ]
     }
   },
   "include": [
-    "src"
+    "**/*.ts",
+    "**/*.tsx",
+    "next-env.d.ts",
+    ".next/types/**/*.ts"
   ],
   "exclude": [
+    "node_modules",
+    "src/handlers/batToExe.ts",
+    "src/handlers/canvasToBlob.ts",
+    "src/handlers/envelope.ts",
+    "src/handlers/json.ts",
+    "src/handlers/qoi-fu.ts",
+    "src/handlers/sppd.ts",
     "src/handlers/qoi-fu/**/*",
     "src/handlers/sppd/**/*",
     "src/handlers/image-to-txt/src/app.ts",

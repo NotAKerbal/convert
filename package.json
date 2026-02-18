@@ -4,15 +4,20 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "copy:wasm": "node scripts/copy-wasm.mjs",
+    "postinstall": "npm run copy:wasm"
   },
   "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.11",
+    "@types/react-dom": "^19.1.7",
+    "next": "^15.5.3",
     "puppeteer": "^24.36.0",
-    "typescript": "~5.9.3",
-    "vite": "^7.2.4",
-    "vite-tsconfig-paths": "^6.0.5"
+    "typescript": "~5.9.3"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "^0.4.2",
@@ -35,11 +40,12 @@
     "pako": "^2.1.0",
     "pdftoimg-js": "^0.2.5",
     "pe-library": "^2.0.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
     "three": "^0.182.0",
     "three-bvh-csg": "^0.0.17",
     "three-mesh-bvh": "^0.9.8",
     "ts-flp": "^1.0.3",
-    "vite-plugin-static-copy": "^3.1.6",
     "wavefile": "^11.0.0"
   }
 }
