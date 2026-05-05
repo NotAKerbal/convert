@@ -26,6 +26,11 @@ export interface OutputFile {
   size: number;
 }
 
+export interface ConversionFailure {
+  name: string;
+  reason: string;
+}
+
 export interface RouteStep {
   format: string;
   handler?: string;
@@ -205,6 +210,45 @@ export function pickInputByFiles(
   }
 
   return { selectedInputIndex, searchValue };
+}
+
+export function pickInputByFile(
+  file: Pick<File, "name" | "type">,
+  allOptions: FormatOption[],
+  inputIndices: number[]
+): FormatOption | null {
+  const mime = normalizeMimeType(file.type);
+  const byMime = inputIndices.find((i) => allOptions[i]?.format.mime === mime);
+  if (mime && typeof byMime === "number") return allOptions[byMime] ?? null;
+
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const byExt = inputIndices.find((i) => allOptions[i]?.format.extension.toLowerCase() === ext);
+  if (typeof byExt === "number") return allOptions[byExt] ?? null;
+
+  return null;
+}
+
+export function getDetectedInputSummary(
+  files: File[],
+  allOptions: FormatOption[],
+  inputIndices: number[]
+) {
+  const detected = files.map((file) => ({ file, option: pickInputByFile(file, allOptions, inputIndices) }));
+  const missing = detected.filter((entry) => !entry.option).map((entry) => entry.file);
+  const signatures = new Set(
+    detected
+      .map((entry) => entry.option)
+      .filter((option): option is FormatOption => Boolean(option))
+      .map((option) => `${option.format.mime}|${option.format.format}`)
+  );
+
+  return {
+    detected,
+    missing,
+    allDetected: detected.length > 0 && missing.length === 0,
+    isMixed: signatures.size > 1,
+    formatCount: signatures.size,
+  };
 }
 
 // ── conversion engine internals ──

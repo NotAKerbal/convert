@@ -4,8 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildFormatLists,
+  type ConversionFailure,
   downloadOutputFile,
   formatFileSize,
+  getDetectedInputSummary,
   getPreviewKind,
   groupByCategory,
   initHandlers,
@@ -37,6 +39,22 @@ const emptyLists: FormatLists = {
   outputIndices: [],
 };
 
+function renameBeforeExtension(name: string, suffix: string) {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return `${name}${suffix}`;
+  return `${name.slice(0, dot)}${suffix}${name.slice(dot)}`;
+}
+
+function uniquifyOutputNames(files: OutputFile[]): OutputFile[] {
+  const seen = new Map<string, number>();
+  return files.map((file) => {
+    const count = seen.get(file.name) ?? 0;
+    seen.set(file.name, count + 1);
+    if (count === 0) return file;
+    return { ...file, name: renameBeforeExtension(file.name, `-${count + 1}`) };
+  });
+}
+
 export function ConverterApp() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -56,6 +74,7 @@ export function ConverterApp() {
 
   const [results, setResults] = useState<OutputFile[]>([]);
   const [resultPath, setResultPath] = useState("");
+  const [conversionFailures, setConversionFailures] = useState<ConversionFailure[]>([]);
 
   const [popup, setPopup] = useState<PopupState>({
     open: false,
@@ -63,14 +82,29 @@ export function ConverterApp() {
     closable: false,
   });
 
+  const detectedInputSummary = useMemo(
+    () => getDetectedInputSummary(selectedFiles, lists.allOptions, lists.inputIndices),
+    [selectedFiles, lists.allOptions, lists.inputIndices]
+  );
+
+  const canUseDetectedBatch = detectedInputSummary.allDetected && detectedInputSummary.isMixed;
+
   const step: Step = useMemo(() => {
-    if (results.length > 0) return "results";
-    if (selectedOutputIndices.size > 0 && selectedInputIdx !== null && selectedFiles.length > 0) {
+    if (results.length > 0 || conversionFailures.length > 0) return "results";
+    const hasInput = selectedInputIdx !== null || canUseDetectedBatch;
+    if (selectedOutputIndices.size > 0 && hasInput && selectedFiles.length > 0) {
       return "ready";
     }
-    if (selectedFiles.length > 0 && selectedInputIdx !== null) return "pick-output";
+    if (selectedFiles.length > 0 && hasInput) return "pick-output";
     return "upload";
-  }, [selectedFiles, selectedInputIdx, selectedOutputIndices, results]);
+  }, [
+    canUseDetectedBatch,
+    conversionFailures.length,
+    results.length,
+    selectedFiles.length,
+    selectedInputIdx,
+    selectedOutputIndices,
+  ]);
 
   // ── initial handler load (once) ──
 
@@ -120,10 +154,6 @@ export function ConverterApp() {
   const selectFiles = useCallback(
     (files: File[]) => {
       if (!files.length) return;
-      if (files.some((f) => f.type !== files[0].type)) {
-        alert("All input files must be of the same type.");
-        return;
-      }
       const sorted = files.slice().sort((a, b) => a.name.localeCompare(b.name));
       setSelectedFiles(sorted);
       setSelectedOutputIndices(new Set());
@@ -132,10 +162,18 @@ export function ConverterApp() {
       revokeOutputFiles(results);
       setResults([]);
       setResultPath("");
+      setConversionFailures([]);
 
       const auto = pickInputByFiles(sorted, lists.allOptions, lists.inputIndices);
-      setSearchInput(auto.searchValue);
-      if (auto.selectedInputIndex !== null) setSelectedInputIdx(auto.selectedInputIndex);
+      const detected = getDetectedInputSummary(sorted, lists.allOptions, lists.inputIndices);
+
+      if (detected.allDetected && detected.isMixed) {
+        setSelectedInputIdx(null);
+        setSearchInput("mixed input batch");
+      } else {
+        setSearchInput(auto.searchValue);
+        setSelectedInputIdx(auto.selectedInputIndex);
+      }
     },
     [lists, results]
   );
@@ -205,70 +243,82 @@ export function ConverterApp() {
   // ── convert (supports bulk: runs each selected output format) ──
 
   const onConvert = async () => {
-    if (!selectedFiles.length || selectedInputIdx === null || selectedOutputIndices.size === 0) return;
-    const inputOpt = lists.allOptions[selectedInputIdx];
-    if (!inputOpt) return;
+    if (!selectedFiles.length || selectedOutputIndices.size === 0) return;
+    const selectedBatchInput = selectedInputIdx !== null ? lists.allOptions[selectedInputIdx] : null;
+    if (!selectedBatchInput && !canUseDetectedBatch) return;
 
     setConverting(true);
     setPopup({ open: true, title: "Converting...", closable: false, routeProgress: null });
 
     const allOutputFiles: OutputFile[] = [];
-    const pathParts: string[] = [];
+    const failures: ConversionFailure[] = [];
+    const pathParts = new Set<string>();
 
     const targets = Array.from(selectedOutputIndices);
+    const batches = canUseDetectedBatch
+      ? detectedInputSummary.detected.map(({ file, option }) => ({ files: [file], inputOption: option }))
+      : [{ files: selectedFiles, inputOption: selectedBatchInput }];
+    const totalJobs = targets.length * batches.length;
+    let jobIndex = 0;
+
     for (let t = 0; t < targets.length; t++) {
       const outputOpt = lists.allOptions[targets[t]];
       if (!outputOpt) continue;
 
-      const batchLabel = targets.length > 1 ? ` (${t + 1}/${targets.length})` : "";
+      for (const batch of batches) {
+        jobIndex++;
+        const firstFileName = batch.files[0]?.name ?? "input";
+        const batchLabel = totalJobs > 1 ? ` (${jobIndex}/${totalJobs})` : "";
 
-      setPopup({
-        open: true,
-        title: `Finding conversion route${batchLabel}`,
-        detail: `${inputOpt.format.format.toUpperCase()} \u2192 ${outputOpt.format.format.toUpperCase()}`,
-        closable: false,
-        routeProgress: null,
-      });
+        if (!batch.inputOption) {
+          failures.push({ name: firstFileName, reason: "Could not detect the input format." });
+          continue;
+        }
 
-      try {
-        const out = await runConversion({
-          selectedFiles,
-          inputOption: inputOpt,
-          outputOption: outputOpt,
-          simpleMode,
-          allOptions: lists.allOptions,
-          progress: {
-            onStatus: (title, detail) =>
-              setPopup((p) => ({ ...p, title: title + batchLabel, detail })),
-            onRouteProgress: (info) =>
-              setPopup((p) => ({
-                ...p,
-                title: info.phase === "searching"
-                  ? `Searching for route${batchLabel}`
-                  : `Converting${batchLabel}`,
-                detail: info.message,
-                routeProgress: info,
-              })),
-          },
-        });
-        allOutputFiles.push(...out.files);
-        pathParts.push(out.path.map((n) => n.format.format).join(" \u2192 "));
-      } catch (err) {
-        console.error(err);
         setPopup({
           open: true,
-          title: `Failed: ${inputOpt.format.format} \u2192 ${outputOpt.format.format}`,
-          detail: String(err),
-          closable: true,
+          title: `Finding conversion route${batchLabel}`,
+          detail: `${firstFileName}: ${batch.inputOption.format.format.toUpperCase()} \u2192 ${outputOpt.format.format.toUpperCase()}`,
+          closable: false,
           routeProgress: null,
         });
-        setConverting(false);
-        return;
+
+        try {
+          const out = await runConversion({
+            selectedFiles: batch.files,
+            inputOption: batch.inputOption,
+            outputOption: outputOpt,
+            simpleMode,
+            allOptions: lists.allOptions,
+            progress: {
+              onStatus: (title, detail) =>
+                setPopup((p) => ({ ...p, title: title + batchLabel, detail })),
+              onRouteProgress: (info) =>
+                setPopup((p) => ({
+                  ...p,
+                  title: info.phase === "searching"
+                    ? `Searching for route${batchLabel}`
+                    : `Converting${batchLabel}`,
+                  detail: info.message,
+                  routeProgress: info,
+                })),
+            },
+          });
+          allOutputFiles.push(...out.files);
+          pathParts.add(out.path.map((n) => n.format.format).join(" \u2192 "));
+        } catch (err) {
+          console.error(err);
+          failures.push({
+            name: `${firstFileName} \u2192 ${outputOpt.format.format.toUpperCase()}`,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
 
-    setResults(allOutputFiles);
-    setResultPath(pathParts.join(" ; "));
+    setResults(uniquifyOutputNames(allOutputFiles));
+    setConversionFailures(failures);
+    setResultPath(Array.from(pathParts).join(" ; "));
     setConverting(false);
     setPopup((p) => ({ ...p, open: false }));
   };
@@ -285,6 +335,7 @@ export function ConverterApp() {
     setOutputCollapsed(false);
     setResults([]);
     setResultPath("");
+    setConversionFailures([]);
   };
 
   // ── render helpers ──
@@ -338,6 +389,9 @@ export function ConverterApp() {
   );
 
   const inputOpt = selectedInputIdx !== null ? lists.allOptions[selectedInputIdx] : null;
+  const inputSummaryLabel = canUseDetectedBatch
+    ? `${detectedInputSummary.formatCount} input formats`
+    : inputOpt?.format.format.toUpperCase();
 
   return (
     <main className="page">
@@ -380,7 +434,7 @@ export function ConverterApp() {
           >
             {selectedFiles.length === 0 ? (
               <>
-                <h2>Click to add your file</h2>
+                <h2>Click to add your files</h2>
                 <p>or drag &amp; drop it here &middot; paste also works</p>
               </>
             ) : (
@@ -450,6 +504,12 @@ export function ConverterApp() {
                   </button>
                 </p>
               )}
+              {!inputOpt && canUseDetectedBatch && (
+                <p>
+                  Detected <strong>{detectedInputSummary.formatCount} input formats</strong>
+                  {" "}across {selectedFiles.length} files
+                </p>
+              )}
             </div>
           </div>
 
@@ -477,10 +537,10 @@ export function ConverterApp() {
       )}
 
       {/* ── Step 3: Ready to convert ── */}
-      {step === "ready" && inputOpt && (
+      {step === "ready" && (inputOpt || canUseDetectedBatch) && (
         <>
           <div className="summary">
-            <span className="tag">{inputOpt.format.format.toUpperCase()}</span>
+            <span className="tag">{inputSummaryLabel}</span>
             <span className="arrow">&rarr;</span>
             <span className="tag-group">
               {Array.from(selectedOutputIndices).map((idx) => {
@@ -553,46 +613,66 @@ export function ConverterApp() {
       {/* ── Step 4: Results ── */}
       {step === "results" && (
         <section className="results-section">
-          <h2 className="results-title">Conversion Complete</h2>
+          <h2 className="results-title">
+            {results.length > 0
+              ? conversionFailures.length > 0
+                ? "Conversion Finished"
+                : "Conversion Complete"
+              : "Conversion Failed"}
+          </h2>
           {resultPath && <p className="results-path">Route: {resultPath}</p>}
 
-          <div className="results-list">
-            {results.map((file, i) => {
-              const preview = getPreviewKind(file.mime);
-              return (
-                <div key={i} className="result-card">
-                  {preview && (
-                    <div className="result-preview">
-                      {preview === "image" && (
-                        <img src={file.url} alt={file.name} />
-                      )}
-                      {preview === "audio" && (
-                        <audio controls src={file.url} />
-                      )}
-                      {preview === "video" && (
-                        <video controls src={file.url} />
-                      )}
-                      {preview === "pdf" && (
-                        <iframe src={file.url} title={file.name} />
-                      )}
-                      {preview === "text" && (
-                        <TextPreview url={file.url} />
-                      )}
+          {results.length > 0 && (
+            <div className="results-list">
+              {results.map((file, i) => {
+                const preview = getPreviewKind(file.mime);
+                return (
+                  <div key={i} className="result-card">
+                    {preview && (
+                      <div className="result-preview">
+                        {preview === "image" && (
+                          <img src={file.url} alt={file.name} />
+                        )}
+                        {preview === "audio" && (
+                          <audio controls src={file.url} />
+                        )}
+                        {preview === "video" && (
+                          <video controls src={file.url} />
+                        )}
+                        {preview === "pdf" && (
+                          <iframe src={file.url} title={file.name} />
+                        )}
+                        {preview === "text" && (
+                          <TextPreview url={file.url} />
+                        )}
+                      </div>
+                    )}
+                    <div className="result-row">
+                      <div className="result-info">
+                        <span className="result-name">{file.name}</span>
+                        <span className="result-size">{formatFileSize(file.size)}</span>
+                      </div>
+                      <button className="download-btn" onClick={() => downloadOutputFile(file)}>
+                        Download
+                      </button>
                     </div>
-                  )}
-                  <div className="result-row">
-                    <div className="result-info">
-                      <span className="result-name">{file.name}</span>
-                      <span className="result-size">{formatFileSize(file.size)}</span>
-                    </div>
-                    <button className="download-btn" onClick={() => downloadOutputFile(file)}>
-                      Download
-                    </button>
                   </div>
+                );
+              })}
+            </div>
+          )}
+
+          {conversionFailures.length > 0 && (
+            <div className="failure-list">
+              <h3>{conversionFailures.length} file{conversionFailures.length !== 1 ? "s" : ""} skipped</h3>
+              {conversionFailures.map((failure, i) => (
+                <div key={i} className="failure-row">
+                  <span className="failure-name">{failure.name}</span>
+                  <span className="failure-reason">{failure.reason}</span>
                 </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
 
           {results.length > 1 && (
             <button

@@ -608,6 +608,48 @@ body {
   transform: translateY(-1px);
 }
 
+.failure-list {
+  max-width: 600px;
+  margin: 16px auto 0;
+  border: 1px solid rgba(251, 113, 133, 0.28);
+  border-radius: 12px;
+  background: rgba(251, 113, 133, 0.08);
+  overflow: hidden;
+  text-align: left;
+}
+
+.failure-list h3 {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(251, 113, 133, 0.2);
+  color: #fda4af;
+  font-size: 0.9rem;
+}
+
+.failure-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 16px;
+}
+
+.failure-row + .failure-row {
+  border-top: 1px solid rgba(251, 113, 133, 0.14);
+}
+
+.failure-name {
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 650;
+  word-break: break-word;
+}
+
+.failure-reason {
+  color: var(--text-sub);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
 .restart-btn-large {
   display: block;
   margin: 20px auto 0;

@@ -63,12 +63,16 @@ class svgTraceHandler implements FormatHandler {
     for (const inputFile of inputFiles) {
       const blob = new Blob([inputFile.bytes as BlobPart], { type: inputFormat.mime });
       const url = URL.createObjectURL(blob)
-      const traced = await imageTracer.imageToSVG(url) // return the full svg string
-      const name = inputFile.name.split(".")[0] + ".svg"
-      const bytes = encoder.encode(traced);
+      try {
+        const traced = await imageTracer.imageToSVG(url) // return the full svg string
+        const name = inputFile.name.replace(/\.[^.]*$/, "") + ".svg"
+        const bytes = encoder.encode(traced);
 
 
-      outputFiles.push({ bytes, name });
+        outputFiles.push({ bytes, name });
+      } finally {
+        URL.revokeObjectURL(url);
+      }
     }
     return outputFiles;
   }
