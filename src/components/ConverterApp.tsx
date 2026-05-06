@@ -3,6 +3,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  cropOutputImage,
+  getImageColorAt,
+  moveCropRect,
+  removeBackgroundFromOutputImage,
+  resizeCropRectFromHandle,
+  type CropAspectRatio,
+  type CropResizeHandle,
+  type CropRect,
+  type Point,
+  type RgbaColor,
+} from "../lib/imageEditing";
+
+import {
   buildFormatLists,
   type ConversionFailure,
   downloadOutputFile,
@@ -55,6 +68,10 @@ function uniquifyOutputNames(files: OutputFile[]): OutputFile[] {
   });
 }
 
+function revokeOutputHistory(history: Record<number, OutputFile[]>) {
+  Object.values(history).forEach((files) => revokeOutputFiles(files));
+}
+
 export function ConverterApp() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -75,6 +92,8 @@ export function ConverterApp() {
   const [results, setResults] = useState<OutputFile[]>([]);
   const [resultPath, setResultPath] = useState("");
   const [conversionFailures, setConversionFailures] = useState<ConversionFailure[]>([]);
+  const [editOutputsOpen, setEditOutputsOpen] = useState(false);
+  const [outputHistory, setOutputHistory] = useState<Record<number, OutputFile[]>>({});
 
   const [popup, setPopup] = useState<PopupState>({
     open: false,
@@ -88,6 +107,7 @@ export function ConverterApp() {
   );
 
   const canUseDetectedBatch = detectedInputSummary.allDetected && detectedInputSummary.isMixed;
+  const hasImageResults = results.some((file) => getPreviewKind(file.mime) === "image");
 
   const step: Step = useMemo(() => {
     if (results.length > 0 || conversionFailures.length > 0) return "results";
@@ -160,9 +180,12 @@ export function ConverterApp() {
       setOutputCollapsed(false);
       setSearchOutput("");
       revokeOutputFiles(results);
+      revokeOutputHistory(outputHistory);
       setResults([]);
       setResultPath("");
       setConversionFailures([]);
+      setEditOutputsOpen(false);
+      setOutputHistory({});
 
       const auto = pickInputByFiles(sorted, lists.allOptions, lists.inputIndices);
       const detected = getDetectedInputSummary(sorted, lists.allOptions, lists.inputIndices);
@@ -175,7 +198,7 @@ export function ConverterApp() {
         setSelectedInputIdx(auto.selectedInputIndex);
       }
     },
-    [lists, results]
+    [lists, outputHistory, results]
   );
 
   // ── global drag/drop + paste ──
@@ -248,6 +271,10 @@ export function ConverterApp() {
     if (!selectedBatchInput && !canUseDetectedBatch) return;
 
     setConverting(true);
+    revokeOutputFiles(results);
+    revokeOutputHistory(outputHistory);
+    setOutputHistory({});
+    setEditOutputsOpen(false);
     setPopup({ open: true, title: "Converting...", closable: false, routeProgress: null });
 
     const allOutputFiles: OutputFile[] = [];
@@ -327,6 +354,7 @@ export function ConverterApp() {
 
   const restart = () => {
     revokeOutputFiles(results);
+    revokeOutputHistory(outputHistory);
     setSelectedFiles([]);
     setSelectedInputIdx(null);
     setSelectedOutputIndices(new Set());
@@ -336,7 +364,45 @@ export function ConverterApp() {
     setResults([]);
     setResultPath("");
     setConversionFailures([]);
+    setEditOutputsOpen(false);
+    setOutputHistory({});
   };
+
+  const replaceEditedOutput = useCallback((index: number, originalFile: OutputFile, editedFile: OutputFile) => {
+    setResults((prev) => {
+      if (prev[index] !== originalFile) {
+        revokeOutputFiles([editedFile]);
+        return prev;
+      }
+      return prev.map((file, i) => (i === index ? editedFile : file));
+    });
+    setOutputHistory((history) => ({
+      ...history,
+      [index]: [...(history[index] ?? []), originalFile],
+    }));
+  }, []);
+
+  const undoEditedOutput = useCallback((index: number) => {
+    let previousFile: OutputFile | null = null;
+    setOutputHistory((history) => {
+      const stack = history[index] ?? [];
+      previousFile = stack.at(-1) ?? null;
+      if (!previousFile) return history;
+
+      const nextStack = stack.slice(0, -1);
+      const nextHistory = { ...history };
+      if (nextStack.length) nextHistory[index] = nextStack;
+      else delete nextHistory[index];
+      return nextHistory;
+    });
+    setResults((prev) => {
+      if (!previousFile) return prev;
+      const restoredFile = previousFile;
+      const current = prev[index];
+      if (current) revokeOutputFiles([current]);
+      return prev.map((file, i) => (i === index ? restoredFile : file));
+    });
+  }, []);
 
   // ── render helpers ──
 
@@ -624,15 +690,33 @@ export function ConverterApp() {
 
           {results.length > 0 && (
             <div className="results-list">
+              {hasImageResults && (
+                <button
+                  className={`edit-outputs-toggle${editOutputsOpen ? " active" : ""}`}
+                  onClick={() => setEditOutputsOpen((open) => !open)}
+                >
+                  <HeroIcon name="sparkles" />
+                  <span>Edit outputs</span>
+                </button>
+              )}
               {results.map((file, i) => {
                 const preview = getPreviewKind(file.mime);
+                if (preview === "image") {
+                  return (
+                    <ImageResultCard
+                      key={i}
+                      file={file}
+                      editOpen={editOutputsOpen}
+                      canUndo={(outputHistory[i]?.length ?? 0) > 0}
+                      onEdited={(originalFile, editedFile) => replaceEditedOutput(i, originalFile, editedFile)}
+                      onUndo={() => undoEditedOutput(i)}
+                    />
+                  );
+                }
                 return (
                   <div key={i} className="result-card">
                     {preview && (
                       <div className="result-preview">
-                        {preview === "image" && (
-                          <img src={file.url} alt={file.name} />
-                        )}
                         {preview === "audio" && (
                           <audio controls src={file.url} />
                         )}
@@ -741,6 +825,395 @@ function TextPreview({ url }: { url: string }) {
     <pre className="text-preview-content">
       {truncated ? text.slice(0, MAX_CHARS) + "\n\n[truncated]" : text}
     </pre>
+  );
+}
+
+function ImageResultCard({
+  file,
+  editOpen,
+  canUndo,
+  onEdited,
+  onUndo,
+}: {
+  file: OutputFile;
+  editOpen: boolean;
+  canUndo: boolean;
+  onEdited: (originalFile: OutputFile, editedFile: OutputFile) => void;
+  onUndo: () => void;
+}) {
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [activeTool, setActiveTool] = useState<"crop" | "remove" | null>(null);
+  const [aspectRatio, setAspectRatio] = useState<CropAspectRatio>("free");
+  const [cropRect, setCropRect] = useState<CropRect | null>(null);
+  const [cropDrag, setCropDrag] = useState<{
+    mode: "move" | "resize";
+    handle?: CropResizeHandle;
+    startPoint: Point;
+    startRect: CropRect;
+  } | null>(null);
+  const [pickingColor, setPickingColor] = useState(false);
+  const [removeSource, setRemoveSource] = useState<"corners" | "picked">("corners");
+  const [targetColor, setTargetColor] = useState<RgbaColor | null>(null);
+  const [tolerance, setTolerance] = useState(34);
+  const [editing, setEditing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActiveTool(null);
+    setCropRect(null);
+    setCropDrag(null);
+    setPickingColor(false);
+    setError(null);
+  }, [file.url]);
+
+  const imageSize = () => {
+    const img = imageRef.current;
+    if (!img || !img.naturalWidth || !img.naturalHeight) return null;
+    return { width: img.naturalWidth, height: img.naturalHeight };
+  };
+
+  const pointFromPointer = (event: React.PointerEvent): Point | null => {
+    const img = imageRef.current;
+    if (!img || !img.naturalWidth || !img.naturalHeight) return null;
+    const bounds = img.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / bounds.width) * img.naturalWidth;
+    const y = ((event.clientY - bounds.top) / bounds.height) * img.naturalHeight;
+    return {
+      x: Math.max(0, Math.min(Math.round(x), img.naturalWidth - 1)),
+      y: Math.max(0, Math.min(Math.round(y), img.naturalHeight - 1)),
+    };
+  };
+
+  const ensureCropRect = () => {
+    const size = imageSize();
+    if (!size) return;
+    setCropRect((rect) => rect ?? {
+      x: Math.round(size.width * 0.1),
+      y: Math.round(size.height * 0.1),
+      width: Math.round(size.width * 0.8),
+      height: Math.round(size.height * 0.8),
+    });
+  };
+
+  const runEdit = async (task: () => Promise<OutputFile>) => {
+    setEditing(true);
+    setError(null);
+    try {
+      onEdited(file, await task());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEditing(false);
+    }
+  };
+
+  const onImageLoad = () => {
+    const size = imageSize();
+    if (size && activeTool === "crop") setCropRect((rect) => rect ?? { x: 0, y: 0, width: size.width, height: size.height });
+  };
+
+  const startCropMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (activeTool !== "crop" || pickingColor || editing) return;
+    const point = pointFromPointer(event);
+    if (!point || !cropRect) return;
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setCropDrag({ mode: "move", startPoint: point, startRect: cropRect });
+  };
+
+  const startCropResize = (event: React.PointerEvent<HTMLButtonElement>, handle: CropResizeHandle) => {
+    if (activeTool !== "crop" || pickingColor || editing) return;
+    const point = pointFromPointer(event);
+    if (!point || !cropRect) return;
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setCropDrag({ mode: "resize", handle, startPoint: point, startRect: cropRect });
+  };
+
+  const moveCrop = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (activeTool !== "crop" || !cropDrag) return;
+    const size = imageSize();
+    const point = pointFromPointer(event);
+    if (!size || !point) return;
+    if (cropDrag.mode === "move") {
+      setCropRect(moveCropRect(cropDrag.startRect, {
+        x: point.x - cropDrag.startPoint.x,
+        y: point.y - cropDrag.startPoint.y,
+      }, size));
+      return;
+    }
+    if (cropDrag.handle) {
+      setCropRect(resizeCropRectFromHandle(cropDrag.startRect, cropDrag.handle, point, aspectRatio, size));
+    }
+  };
+
+  const stopCrop = () => setCropDrag(null);
+
+  const pickBackgroundColor = async (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!pickingColor || editing) return;
+    const point = pointFromPointer(event);
+    if (!point) return;
+    setPickingColor(false);
+    setEditing(true);
+    setError(null);
+    try {
+      const color = await getImageColorAt(file, point);
+      setTargetColor(color);
+      onEdited(file, await removeBackgroundFromOutputImage(file, [point], tolerance));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEditing(false);
+    }
+  };
+
+  const applyCrop = () => {
+    if (!cropRect) return;
+    void runEdit(() => cropOutputImage(file, cropRect));
+  };
+
+  const removeCornerBackground = () => {
+    const size = imageSize();
+    if (!size) return;
+    const seeds = [
+      { x: 0, y: 0 },
+      { x: size.width - 1, y: 0 },
+      { x: 0, y: size.height - 1 },
+      { x: size.width - 1, y: size.height - 1 },
+    ];
+    void runEdit(() => removeBackgroundFromOutputImage(file, seeds, tolerance));
+  };
+
+  const cropStyle = (() => {
+    const img = imageRef.current;
+    const surface = img?.parentElement;
+    if (!cropRect || !img || !surface || !img.naturalWidth || !img.naturalHeight) return undefined;
+    const imageBounds = img.getBoundingClientRect();
+    const surfaceBounds = surface.getBoundingClientRect();
+    return {
+      left: `${imageBounds.left - surfaceBounds.left + (cropRect.x / img.naturalWidth) * imageBounds.width}px`,
+      top: `${imageBounds.top - surfaceBounds.top + (cropRect.y / img.naturalHeight) * imageBounds.height}px`,
+      width: `${(cropRect.width / img.naturalWidth) * imageBounds.width}px`,
+      height: `${(cropRect.height / img.naturalHeight) * imageBounds.height}px`,
+    } as React.CSSProperties;
+  })();
+
+  return (
+    <div className="result-card">
+      <div
+        className={`image-edit-surface${activeTool === "crop" ? " cropping" : ""}${pickingColor ? " picking" : ""}`}
+        onPointerDown={(event) => {
+          void pickBackgroundColor(event);
+        }}
+        onPointerMove={moveCrop}
+        onPointerUp={stopCrop}
+        onPointerCancel={stopCrop}
+      >
+        <img ref={imageRef} src={file.url} alt={file.name} onLoad={onImageLoad} />
+        {activeTool === "crop" && cropStyle && (
+          <div className="crop-box" style={cropStyle} onPointerDown={startCropMove}>
+            {(["nw", "ne", "sw", "se"] as CropResizeHandle[]).map((handle) => (
+              <button
+                key={handle}
+                type="button"
+                className={`crop-handle crop-handle-${handle}`}
+                aria-label={`Resize crop ${handle}`}
+                onPointerDown={(event) => startCropResize(event, handle)}
+              />
+            ))}
+          </div>
+        )}
+        {editing && <div className="edit-busy">Editing...</div>}
+      </div>
+
+      {editOpen && (
+        <div className="image-edit-panel">
+          <div className="image-edit-actions">
+            <IconButton
+              label="Crop"
+              active={activeTool === "crop"}
+              disabled={editing}
+              icon="crop"
+              onClick={() => {
+                setActiveTool((tool) => (tool === "crop" ? null : "crop"));
+                setPickingColor(false);
+                ensureCropRect();
+              }}
+            />
+            <IconButton
+              label="Remove"
+              active={activeTool === "remove"}
+              disabled={editing}
+              icon="eraser"
+              onClick={() => {
+                setActiveTool((tool) => (tool === "remove" ? null : "remove"));
+                setPickingColor(false);
+              }}
+            />
+            <IconButton
+              label="Undo"
+              disabled={!canUndo || editing}
+              icon="undo"
+              onClick={onUndo}
+            />
+          </div>
+
+          {activeTool === "crop" && (
+            <div className="tool-settings">
+              <div className="aspect-buttons" aria-label="Crop aspect ratio">
+                {(["free", "1:1", "4:3", "16:9", "3:4"] as CropAspectRatio[]).map((ratio) => (
+                  <button
+                    key={ratio}
+                    className={`aspect-btn${aspectRatio === ratio ? " active" : ""}`}
+                    onClick={() => setAspectRatio(ratio)}
+                    type="button"
+                  >
+                    <HeroIcon name="crop" />
+                    <span>{ratio === "free" ? "Free" : ratio}</span>
+                  </button>
+                ))}
+              </div>
+              <IconButton
+                label="Apply crop"
+                disabled={!cropRect || editing}
+                icon="check"
+                onClick={applyCrop}
+              />
+            </div>
+          )}
+
+          {activeTool === "remove" && (
+            <div className="tool-settings">
+              <div className="remove-source-buttons" aria-label="Remove background source">
+                <button
+                  className={`aspect-btn${removeSource === "corners" ? " active" : ""}`}
+                  onClick={() => {
+                    setRemoveSource("corners");
+                    setPickingColor(false);
+                    removeCornerBackground();
+                  }}
+                  type="button"
+                  disabled={editing}
+                >
+                  <HeroIcon name="sparkles" />
+                  <span>Corners</span>
+                </button>
+                <button
+                  className={`aspect-btn${removeSource === "picked" ? " active" : ""}`}
+                  onClick={() => {
+                    setRemoveSource("picked");
+                    setPickingColor(true);
+                  }}
+                  type="button"
+                  disabled={editing}
+                >
+                  <HeroIcon name="eyedropper" />
+                  <span>{pickingColor ? "Click image" : "Pick color"}</span>
+                </button>
+              </div>
+              <div className="background-tools">
+                <label>
+                  <span>Tolerance</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="120"
+                    value={tolerance}
+                    onChange={(event) => setTolerance(Number(event.target.value))}
+                  />
+                </label>
+                {targetColor && (
+                  <span
+                    className="picked-color"
+                    title={`rgb(${targetColor[0]}, ${targetColor[1]}, ${targetColor[2]})`}
+                    style={{ backgroundColor: `rgb(${targetColor[0]}, ${targetColor[1]}, ${targetColor[2]})` }}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
+          {error && <p className="edit-error">{error}</p>}
+        </div>
+      )}
+
+      <div className="result-row">
+        <div className="result-info">
+          <span className="result-name">{file.name}</span>
+          <span className="result-size">{formatFileSize(file.size)}</span>
+        </div>
+        <button className="download-btn" onClick={() => downloadOutputFile(file)}>
+          Download
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function IconButton({
+  label,
+  icon,
+  active = false,
+  disabled = false,
+  onClick,
+}: {
+  label: string;
+  icon: HeroIconName;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`hero-icon-btn${active ? " active" : ""}`}
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+    >
+      <HeroIcon name={icon} />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+type HeroIconName = "check" | "crop" | "eraser" | "eyedropper" | "sparkles" | "undo";
+
+function HeroIcon({ name }: { name: HeroIconName }) {
+  const paths: Record<HeroIconName, React.ReactNode> = {
+    check: <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />,
+    crop: (
+      <>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v10.5A3.75 3.75 0 0 0 10.5 17.25H21" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 6.75h10.5A3.75 3.75 0 0 1 17.25 10.5V21" />
+      </>
+    ),
+    eraser: (
+      <>
+        <path strokeLinecap="round" strokeLinejoin="round" d="m16.5 8.25-8.25 8.25a3 3 0 0 0 4.24 4.24l8.25-8.25a3 3 0 0 0-4.24-4.24Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="m12 12.75 4.25 4.25M3.75 21h9" />
+      </>
+    ),
+    eyedropper: (
+      <>
+        <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 5.25 3 3m-11.25 9 9.75-9.75a2.12 2.12 0 0 0-3-3L4.5 14.25V19.5h5.25Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6 16.5 3.75 18.75" />
+      </>
+    ),
+    sparkles: (
+      <>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75 8.25 8.25 3.75 9.75l4.5 1.5 1.5 4.5 1.5-4.5 4.5-1.5-4.5-1.5-1.5-4.5Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M18 12.75 17.25 15l-2.25.75 2.25.75L18 18.75l.75-2.25 2.25-.75-2.25-.75L18 12.75Z" />
+      </>
+    ),
+    undo: <path strokeLinecap="round" strokeLinejoin="round" d="M9 15 3.75 9.75 9 4.5M4.5 9.75H15a5.25 5.25 0 1 1 0 10.5h-2.25" />,
+  };
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
+      {paths[name]}
+    </svg>
   );
 }
 
