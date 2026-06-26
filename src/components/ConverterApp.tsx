@@ -28,8 +28,8 @@ import {
   getFormatCategory,
   getPreviewKind,
   groupByCategory,
-  initHandlers,
   loadCacheFromPublic,
+  warmUpHandlers,
   matchesSearch,
   pickInputByFiles,
   revokeOutputFiles,
@@ -224,46 +224,94 @@ export function ConverterApp() {
     selectedOutputIndices,
   ]);
 
-  // ── initial handler load (once) ──
+  // ── initial load: render instantly from cache, warm up engines in the bg ──
 
   const [handlersReady, setHandlersReady] = useState(false);
+  // Bumped as background warm-up reveals new handlers, retriggering the list
+  // rebuild below. Guarded so it never reshuffles an in-progress selection.
+  const [formatVersion, setFormatVersion] = useState(0);
+  const [backgroundLoading, setBackgroundLoading] = useState(false);
+
+  // Lets the background warm-up check the live selection without being a
+  // dependency of the load effect (which must run exactly once).
+  const selectedFilesRef = useRef(selectedFiles);
+  useEffect(() => { selectedFilesRef.current = selectedFiles; }, [selectedFiles]);
 
   useEffect(() => {
     let active = true;
+
+    // Reveal newly warmed-up formats, but only while the user hasn't started
+    // picking files — rebuilding mid-flow could shuffle option indices and
+    // drop their selection.
+    const revealIfIdle = () => {
+      if (selectedFilesRef.current.length === 0) setFormatVersion((v) => v + 1);
+    };
+
     (async () => {
       setLoadingFormats(true);
-      setPopup({
-        open: true,
-        title: "Loading tools...",
-        detail: "Building the supported format list. This may take a moment.",
-        closable: false,
-      });
       await loadCacheFromPublic();
-      await initHandlers();
       if (!active) return;
+
+      const haveCache = supportedFormatCache.size > 0;
+      if (haveCache) {
+        // Cache hit: show the picker immediately, no blocking spinner.
+        setHandlersReady(true);
+        setLoadingFormats(false);
+        setPopup((p) => ({ ...p, open: false }));
+      } else {
+        // No cache (typically a fresh local dev session): we have nothing to
+        // show yet, so keep a spinner until the first engine comes online.
+        setPopup({
+          open: true,
+          title: "Loading tools...",
+          detail: "Building the supported format list. This only happens without a cache.",
+          closable: false,
+        });
+      }
+
+      // Warm up every engine in the background. This fills in any handlers the
+      // cache lacked and pre-loads conversion engines so the first conversion
+      // is instant. It never blocks the UI once the cache has rendered.
+      setBackgroundLoading(true);
+      await warmUpHandlers(() => {
+        if (!active) return;
+        if (!haveCache) {
+          // Without a cache, reveal the picker as soon as anything is ready.
+          setHandlersReady(true);
+          setLoadingFormats(false);
+          setPopup((p) => ({ ...p, open: false }));
+        }
+        revealIfIdle();
+      });
+      if (!active) return;
+
       setHandlersReady(true);
       setLoadingFormats(false);
+      setBackgroundLoading(false);
       setPopup((p) => ({ ...p, open: false }));
+      window.formatCacheReady = true;
+      revealIfIdle();
     })().catch((err) => {
       if (!active) return;
       console.error(err);
       setLoadingFormats(false);
+      setBackgroundLoading(false);
       setPopup({ open: true, title: "Failed to load tools", detail: String(err), closable: true });
     });
+
     return () => { active = false; };
   }, []);
 
-  // ── expose the format cache for dev tooling (see README / buildCache) ──
+  // ── expose the format cache for dev tooling (see README / build-cache) ──
 
   useEffect(() => {
     if (!handlersReady) return;
     window.supportedFormatCache = supportedFormatCache;
     window.printSupportedFormatCache = () =>
       JSON.stringify(Array.from(supportedFormatCache.entries()));
-    console.log("Built initial format list.");
   }, [handlersReady]);
 
-  // ── rebuild lists when mode changes (instant, no async) ──
+  // ── rebuild lists on mode change or as background warm-up adds formats ──
 
   useEffect(() => {
     if (!handlersReady) return;
@@ -275,7 +323,7 @@ export function ConverterApp() {
       prev.forEach((i) => { if (data.outputIndices.includes(i)) next.add(i); });
       return next;
     });
-  }, [simpleMode, handlersReady]);
+  }, [simpleMode, handlersReady, formatVersion]);
 
   // ── file selection ──
 
@@ -643,6 +691,12 @@ export function ConverterApp() {
       <header className="header">
         <h1>Convert to it!</h1>
         <div className="header-actions">
+          {backgroundLoading && !popup.open && (
+            <span className="bg-loading" title="Loading conversion engines in the background">
+              <span className="bg-loading-dot" />
+              Warming up tools...
+            </span>
+          )}
           {step !== "upload" && (
             <button className="restart-btn" onClick={restart}>Restart</button>
           )}

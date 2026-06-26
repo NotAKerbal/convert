@@ -3,7 +3,9 @@ package-lock.json
 node_modules
 start.sh
 dist
-cache.json
+# Legacy Vite cache at the repo root is still generated/ignored.
+# The Next app ships a committed public/cache.json for instant first loads.
+/cache.json
 .next
 tsconfig.tsbuildinfo
 public/wasm/

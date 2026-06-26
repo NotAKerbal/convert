@@ -27,8 +27,12 @@ page.on("pageerror", (err) => console.log("[page error]", err.message));
 console.log("Loading", url);
 await page.goto(url, { waitUntil: "domcontentloaded", timeout: 0 });
 
+// The app renders instantly from any existing cache, then warms up every
+// handler in the background. Wait for that full warm-up to finish so we dump
+// a complete cache rather than a partial one.
+console.log("Warming up handlers (this can take a minute)...");
 await page.waitForFunction(
-  () => typeof window.printSupportedFormatCache === "function",
+  () => window.formatCacheReady === true && typeof window.printSupportedFormatCache === "function",
   { timeout: 0, polling: 1000 }
 );
 

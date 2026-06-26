@@ -152,6 +152,48 @@ export async function initHandlers() {
   handlersInitialized = true;
 }
 
+export interface WarmUpProgress {
+  handlerName: string;
+  ready: number;
+  total: number;
+}
+
+let warmUpPromise: Promise<void> | null = null;
+
+/**
+ * Initializes every handler's underlying engine (usually WASM) in the
+ * background. The format picker renders immediately from the cached format
+ * list (see {@link loadCacheFromPublic}); this pass fills in any handlers the
+ * cache was missing and pre-warms the conversion engines so the first
+ * conversion doesn't pay a cold-start cost.
+ *
+ * Runs at most once per page load and never throws — individual handler
+ * failures are logged and skipped. {@link onProgress} fires after each handler
+ * settles so the UI can progressively reveal newly available formats.
+ */
+export function warmUpHandlers(onProgress?: (info: WarmUpProgress) => void): Promise<void> {
+  if (warmUpPromise) return warmUpPromise;
+  warmUpPromise = (async () => {
+    const total = handlers.length;
+    for (let i = 0; i < handlers.length; i++) {
+      const handler = handlers[i];
+      if (!handler.ready) {
+        try {
+          await handler.init();
+        } catch (err) {
+          console.warn(`Handler "${handler.name}" failed to initialize:`, err);
+        }
+      }
+      if (handler.supportedFormats?.length) {
+        supportedFormatCache.set(handler.name, handler.supportedFormats);
+      }
+      onProgress?.({ handlerName: handler.name, ready: i + 1, total });
+    }
+    handlersInitialized = true;
+  })();
+  return warmUpPromise;
+}
+
 export function buildFormatLists(simpleMode: boolean): FormatLists {
   const allOptions: FormatOption[] = [];
   const inputIndices: number[] = [];
