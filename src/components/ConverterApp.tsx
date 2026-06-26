@@ -17,10 +17,15 @@ import {
 
 import {
   buildFormatLists,
+  CATEGORY_META,
+  computeReachableMimes,
+  supportedFormatCache,
   type ConversionFailure,
   downloadOutputFile,
+  type FormatCategory,
   formatFileSize,
   getDetectedInputSummary,
+  getFormatCategory,
   getPreviewKind,
   groupByCategory,
   initHandlers,
@@ -51,6 +56,96 @@ const emptyLists: FormatLists = {
   inputIndices: [],
   outputIndices: [],
 };
+
+const BROWSE_CATEGORIES: FormatCategory[] = [
+  "image",
+  "audio",
+  "video",
+  "text",
+  "application",
+  "other",
+];
+
+interface CategoryCount {
+  category: FormatCategory;
+  label: string;
+  color: string;
+  count: number;
+}
+
+function countByCategory(indices: number[], allOptions: FormatOption[]): CategoryCount[] {
+  const counts = new Map<FormatCategory, number>();
+  for (const idx of indices) {
+    const opt = allOptions[idx];
+    if (!opt) continue;
+    const cat = getFormatCategory(opt.format.mime);
+    counts.set(cat, (counts.get(cat) ?? 0) + 1);
+  }
+  return BROWSE_CATEGORIES
+    .filter((cat) => (counts.get(cat) ?? 0) > 0)
+    .map((cat) => ({ category: cat, ...CATEGORY_META[cat], count: counts.get(cat)! }));
+}
+
+function renderCategoryTiles(
+  counts: CategoryCount[],
+  onPick: (category: FormatCategory) => void
+) {
+  if (counts.length === 0) {
+    return <div className="empty">No matching formats found.</div>;
+  }
+  return (
+    <div className="category-tiles">
+      {counts.map((entry) => (
+        <button
+          key={entry.category}
+          className="category-tile"
+          style={{ "--cat-color": entry.color } as React.CSSProperties}
+          onClick={() => onPick(entry.category)}
+        >
+          <span className="category-tile-icon" style={{ color: entry.color }}>
+            <MediaIcon category={entry.category} />
+          </span>
+          <span className="category-tile-label">{entry.label}</span>
+          <span className="category-tile-count">
+            {entry.count} format{entry.count !== 1 ? "s" : ""}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function renderCategoryChips(
+  counts: CategoryCount[],
+  active: FormatCategory | null,
+  onPick: (category: FormatCategory | null) => void
+) {
+  if (counts.length <= 1) return null;
+  const total = counts.reduce((sum, entry) => sum + entry.count, 0);
+  return (
+    <div className="category-chips" role="tablist" aria-label="Filter by type">
+      <button
+        className={`category-chip${active === null ? " active" : ""}`}
+        onClick={() => onPick(null)}
+      >
+        All
+        <span className="category-chip-count">{total}</span>
+      </button>
+      {counts.map((entry) => (
+        <button
+          key={entry.category}
+          className={`category-chip${active === entry.category ? " active" : ""}`}
+          style={{ "--cat-color": entry.color } as React.CSSProperties}
+          onClick={() => onPick(active === entry.category ? null : entry.category)}
+        >
+          <span className="category-chip-dot" style={{ background: entry.color }} />
+          {entry.label}
+          <span className="category-chip-count">{entry.count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function renameBeforeExtension(name: string, suffix: string) {
   const dot = name.lastIndexOf(".");
@@ -86,6 +181,9 @@ export function ConverterApp() {
 
   const [searchInput, setSearchInput] = useState("");
   const [searchOutput, setSearchOutput] = useState("");
+
+  const [inputCategory, setInputCategory] = useState<FormatCategory | null>(null);
+  const [outputCategory, setOutputCategory] = useState<FormatCategory | null>(null);
 
   const [outputCollapsed, setOutputCollapsed] = useState(false);
 
@@ -155,6 +253,16 @@ export function ConverterApp() {
     return () => { active = false; };
   }, []);
 
+  // ── expose the format cache for dev tooling (see README / buildCache) ──
+
+  useEffect(() => {
+    if (!handlersReady) return;
+    window.supportedFormatCache = supportedFormatCache;
+    window.printSupportedFormatCache = () =>
+      JSON.stringify(Array.from(supportedFormatCache.entries()));
+    console.log("Built initial format list.");
+  }, [handlersReady]);
+
   // ── rebuild lists when mode changes (instant, no async) ──
 
   useEffect(() => {
@@ -179,6 +287,7 @@ export function ConverterApp() {
       setSelectedOutputIndices(new Set());
       setOutputCollapsed(false);
       setSearchOutput("");
+      setOutputCategory(null);
       revokeOutputFiles(results);
       revokeOutputHistory(outputHistory);
       setResults([]);
@@ -223,22 +332,77 @@ export function ConverterApp() {
     };
   }, [selectFiles]);
 
+  // ── reachable output formats (hide routes we can't actually do) ──
+
+  const reachableMimes = useMemo<Set<string> | null>(() => {
+    if (!handlersReady) return null;
+
+    let inputMimes: string[] = [];
+    if (selectedInputIdx !== null) {
+      const mime = lists.allOptions[selectedInputIdx]?.format.mime;
+      if (mime) inputMimes = [mime];
+    } else if (canUseDetectedBatch) {
+      inputMimes = Array.from(new Set(
+        detectedInputSummary.detected
+          .map((entry) => entry.option?.format.mime)
+          .filter((mime): mime is string => Boolean(mime))
+      ));
+    }
+
+    if (inputMimes.length === 0) return null;
+    if (inputMimes.length === 1) return computeReachableMimes(inputMimes);
+
+    // For a mixed batch, only keep targets reachable from every input format.
+    const sets = inputMimes.map((mime) => computeReachableMimes([mime]));
+    const [first, ...rest] = sets;
+    const intersection = new Set<string>();
+    for (const mime of first) {
+      if (rest.every((set) => set.has(mime))) intersection.add(mime);
+    }
+    return intersection;
+  }, [handlersReady, selectedInputIdx, canUseDetectedBatch, detectedInputSummary, lists.allOptions]);
+
   // ── filtered & grouped indices ──
 
   const filteredInputs = useMemo(
     () => lists.inputIndices.filter((i) => {
       const o = lists.allOptions[i];
-      return o && matchesSearch(o, simpleMode, searchInput);
+      if (!o) return false;
+      if (!searchInput.trim() && inputCategory && getFormatCategory(o.format.mime) !== inputCategory) {
+        return false;
+      }
+      return matchesSearch(o, simpleMode, searchInput);
     }),
-    [lists, searchInput, simpleMode]
+    [lists, searchInput, simpleMode, inputCategory]
+  );
+
+  const reachableOutputIndices = useMemo(
+    () => lists.outputIndices.filter((i) => {
+      const o = lists.allOptions[i];
+      if (!o) return false;
+      return !reachableMimes || reachableMimes.has(o.format.mime);
+    }),
+    [lists, reachableMimes]
   );
 
   const filteredOutputs = useMemo(
-    () => lists.outputIndices.filter((i) => {
+    () => reachableOutputIndices.filter((i) => {
       const o = lists.allOptions[i];
-      return o && matchesSearch(o, simpleMode, searchOutput);
+      if (!o) return false;
+      if (outputCategory && getFormatCategory(o.format.mime) !== outputCategory) return false;
+      return matchesSearch(o, simpleMode, searchOutput);
     }),
-    [lists, searchOutput, simpleMode]
+    [reachableOutputIndices, lists.allOptions, searchOutput, simpleMode, outputCategory]
+  );
+
+  const inputCategoryCounts = useMemo(
+    () => countByCategory(lists.inputIndices, lists.allOptions),
+    [lists]
+  );
+
+  const outputCategoryCounts = useMemo(
+    () => countByCategory(reachableOutputIndices, lists.allOptions),
+    [reachableOutputIndices, lists.allOptions]
   );
 
   const inputGroups = useMemo(
@@ -360,6 +524,8 @@ export function ConverterApp() {
     setSelectedOutputIndices(new Set());
     setSearchInput("");
     setSearchOutput("");
+    setInputCategory(null);
+    setOutputCategory(null);
     setOutputCollapsed(false);
     setResults([]);
     setResultPath("");
@@ -466,7 +632,11 @@ export function ConverterApp() {
         type="file"
         multiple
         style={{ display: "none" }}
-        onChange={(e) => { if (e.target.files) selectFiles(Array.from(e.target.files)); }}
+        onChange={(e) => {
+          if (e.target.files) selectFiles(Array.from(e.target.files));
+          // Allow re-selecting the same file later (e.g. after "Start Over").
+          e.target.value = "";
+        }}
       />
 
       {/* ── Header ── */}
@@ -515,23 +685,38 @@ export function ConverterApp() {
           {!loadingFormats && lists.inputIndices.length > 0 && (
             <section>
               <div className="step-label">
-                {selectedFiles.length > 0
-                  ? "Select input format"
-                  : "Supported input formats"}
+                {selectedFiles.length > 0 ? "Select input format" : "What are you converting?"}
+                {selectedFiles.length === 0 && !inputCategory && !searchInput.trim() && (
+                  <span className="bulk-hint">pick a type, or drop a file above</span>
+                )}
               </div>
               <input
                 className="search"
-                placeholder="Search formats..."
+                placeholder="Search all formats..."
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 autoFocus={selectedFiles.length > 0}
               />
-              {renderGroupedGrid(
-                inputGroups,
-                (idx) => idx === selectedInputIdx,
-                selectedFiles.length > 0
-                  ? (idx) => setSelectedInputIdx(idx)
-                  : () => {}
+              {!searchInput.trim() && !inputCategory ? (
+                renderCategoryTiles(inputCategoryCounts, (cat) => setInputCategory(cat))
+              ) : (
+                <>
+                  {inputCategory && !searchInput.trim() && (
+                    <button
+                      className="category-back"
+                      onClick={() => setInputCategory(null)}
+                    >
+                      &larr; All types
+                    </button>
+                  )}
+                  {renderGroupedGrid(
+                    inputGroups,
+                    (idx) => idx === selectedInputIdx,
+                    selectedFiles.length > 0
+                      ? (idx) => setSelectedInputIdx(idx)
+                      : () => fileInputRef.current?.click()
+                  )}
+                </>
               )}
             </section>
           )}
@@ -593,6 +778,7 @@ export function ConverterApp() {
               onChange={(e) => setSearchOutput(e.target.value)}
               autoFocus
             />
+            {renderCategoryChips(outputCategoryCounts, outputCategory, setOutputCategory)}
             {renderGroupedGrid(
               outputGroups,
               (idx) => selectedOutputIndices.has(idx),
@@ -665,6 +851,7 @@ export function ConverterApp() {
                   onChange={(e) => setSearchOutput(e.target.value)}
                   style={{ marginTop: 8 }}
                 />
+                {renderCategoryChips(outputCategoryCounts, outputCategory, setOutputCategory)}
                 {renderGroupedGrid(
                   outputGroups,
                   (idx) => selectedOutputIndices.has(idx),
@@ -1213,6 +1400,56 @@ function HeroIcon({ name }: { name: HeroIconName }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
       {paths[name]}
+    </svg>
+  );
+}
+
+function MediaIcon({ category }: { category: FormatCategory }) {
+  const paths: Record<FormatCategory, React.ReactNode> = {
+    image: (
+      <>
+        <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+        <circle cx="8.5" cy="9.5" r="1.6" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="m4 17 4.5-4.5 3.5 3.5 3-3 5 5" />
+      </>
+    ),
+    audio: (
+      <>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 18V6l10-2v12" />
+        <circle cx="6" cy="18" r="3" />
+        <circle cx="16" cy="16" r="3" />
+      </>
+    ),
+    video: (
+      <>
+        <rect x="2.5" y="5.5" width="13" height="13" rx="2.5" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="m15.5 10 6-3.5v11l-6-3.5" />
+      </>
+    ),
+    text: (
+      <>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6.5 3.5h11a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19V5a1.5 1.5 0 0 1 1.5-1.5Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8.5 8h7M8.5 11.5h7M8.5 15h4" />
+      </>
+    ),
+    application: (
+      <>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8.5Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 3.5V8.5h5" />
+      </>
+    ),
+    other: (
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.6 9.5a2.5 2.5 0 1 1 3.4 2.3c-.7.3-1 .8-1 1.5v.4" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5h.01" />
+      </>
+    ),
+  };
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7">
+      {paths[category]}
     </svg>
   );
 }
