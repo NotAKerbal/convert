@@ -1,4 +1,4 @@
-import { cp, mkdir, access } from "node:fs/promises";
+import { cp, mkdir, access, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,6 +31,10 @@ const targets = [
   {
     source: path.join(root, "node_modules", "@imagemagick", "magick-wasm", "dist", "magick.wasm"),
     destination: path.join(outDir, "magick.wasm")
+  },
+  {
+    source: path.join(root, "node_modules", "pdfjs-dist", "build", "pdf.worker.min.mjs"),
+    destination: path.join(outDir, "pdf.worker.min.mjs")
   }
 ];
 
@@ -43,6 +47,23 @@ for (const target of targets) {
   } catch {
     console.warn(`Skipping missing asset: ${path.relative(root, target.source)}`);
   }
+}
+
+// Copy the @ffmpeg/ffmpeg ESM worker as *static* files. Bundling the worker
+// (the default behaviour) breaks ffmpeg.wasm because webpack rewrites the
+// worker's runtime `import(coreURL)` call. Serving the worker untouched lets
+// the browser resolve the core module natively.
+const ffmpegWorkerSrc = path.join(root, "node_modules", "@ffmpeg", "ffmpeg", "dist", "esm");
+const ffmpegWorkerDest = path.join(outDir, "ffmpeg");
+try {
+  await mkdir(ffmpegWorkerDest, { recursive: true });
+  const entries = await readdir(ffmpegWorkerSrc);
+  for (const entry of entries) {
+    if (!entry.endsWith(".js")) continue;
+    await cp(path.join(ffmpegWorkerSrc, entry), path.join(ffmpegWorkerDest, entry), { force: true });
+  }
+} catch {
+  console.warn("Skipping missing asset: @ffmpeg/ffmpeg ESM worker");
 }
 
 console.log(`Copied ${targets.length} WASM assets to public/wasm.`);

@@ -32,8 +32,15 @@ class FFmpegHandler implements FormatHandler {
 
   async loadFFmpeg () {
     if (!this.#ffmpeg) return;
+    // `classWorkerURL` is resolved against the bundle's `import.meta.url`, which
+    // webpack rewrites to a `file://` path — so it must be an absolute URL with
+    // an origin. `coreURL` is fetched from inside the worker (an http origin),
+    // so a root-relative path is fine there.
+    const origin = typeof location !== "undefined" ? location.origin : "";
     return await this.#ffmpeg.load({
-      coreURL: "/wasm/ffmpeg-core.js"
+      coreURL: "/wasm/ffmpeg-core.js",
+      // Static, unbundled ESM worker (see scripts/copy-wasm.mjs).
+      classWorkerURL: `${origin}/wasm/ffmpeg/worker.js`
     });
   }
   terminateFFmpeg () {
@@ -211,6 +218,10 @@ class FFmpegHandler implements FormatHandler {
     const command = ["-hide_banner", "-f", "concat", "-safe", "0", "-i", "list.txt", "-f", outputFormat.internal];
     if (outputFormat.mime === "video/mp4") {
       command.push("-pix_fmt", "yuv420p");
+    }
+    // Ripping audio out of a video: drop the video stream entirely.
+    if (outputFormat.mime.startsWith("audio/") && !inputFormat.mime.startsWith("audio/")) {
+      command.push("-vn");
     }
     if (args) command.push(...args);
     command.push("output");
