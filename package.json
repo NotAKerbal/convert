@@ -9,6 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "copy:wasm": "node scripts/copy-wasm.mjs",
+    "build:cache": "node scripts/build-cache.mjs",
     "postinstall": "npm run copy:wasm"
   },
   "devDependencies": {

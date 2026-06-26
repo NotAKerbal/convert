@@ -1,6 +1,7 @@
 import type { ConvertPathNode, FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
 import handlers from "../handlers";
 import normalizeMimeType from "../normalizeMimeType.ts";
+import JSZip from "jszip";
 
 export interface FormatOption {
   format: FileFormat;
@@ -140,7 +141,10 @@ export async function initHandlers() {
   if (handlersInitialized) return;
   for (const handler of handlers) {
     if (supportedFormatCache.has(handler.name)) continue;
-    try { await handler.init(); } catch { continue; }
+    try { await handler.init(); } catch (err) {
+      console.warn(`Handler "${handler.name}" failed to initialize:`, err);
+      continue;
+    }
     if (handler.supportedFormats) {
       supportedFormatCache.set(handler.name, handler.supportedFormats);
     }
@@ -181,6 +185,59 @@ export function buildFormatLists(simpleMode: boolean): FormatLists {
   }
 
   return { allOptions, inputIndices, outputIndices };
+}
+
+// ── reachability (which output formats can we actually produce?) ──
+
+interface HandlerCapability {
+  anyInput: boolean;
+  fromMimes: Set<string>;
+  toMimes: string[];
+}
+
+function buildHandlerCapabilities(): HandlerCapability[] {
+  return handlers.map((handler) => {
+    const formats = supportedFormatCache.get(handler.name) ?? [];
+    return {
+      anyInput: Boolean(handler.supportAnyInput),
+      fromMimes: new Set(formats.filter((f) => f.from && f.mime).map((f) => f.mime)),
+      toMimes: formats.filter((f) => f.to && f.mime).map((f) => f.mime),
+    };
+  });
+}
+
+/**
+ * Computes the set of output MIME types reachable from one or more input MIME
+ * types, mirroring the conversion engine's breadth-first route search (which is
+ * capped at {@link maxHops} handler hops). This lets the UI hide output formats
+ * that can never be produced from the chosen input.
+ */
+export function computeReachableMimes(inputMimes: string[], maxHops = 4): Set<string> {
+  const caps = buildHandlerCapabilities();
+  const reachable = new Set<string>(inputMimes);
+  const expanded = new Set<number>();
+  let frontier = new Set<string>(inputMimes);
+
+  for (let hop = 0; hop < maxHops && frontier.size > 0; hop++) {
+    const next = new Set<string>();
+    for (let i = 0; i < caps.length; i++) {
+      if (expanded.has(i)) continue;
+      const cap = caps[i];
+      // "Any input" handlers (e.g. zip) accept anything we already have.
+      const triggered = cap.anyInput || [...cap.fromMimes].some((m) => frontier.has(m));
+      if (!triggered) continue;
+      expanded.add(i);
+      for (const toMime of cap.toMimes) {
+        if (!reachable.has(toMime)) {
+          reachable.add(toMime);
+          next.add(toMime);
+        }
+      }
+    }
+    frontier = next;
+  }
+
+  return reachable;
 }
 
 // ── auto-detect input format ──
@@ -368,9 +425,17 @@ async function buildConvertPath(
     if (deadEnds.has(prev.format.format)) continue;
 
     if (simpleMode) {
-      for (const c of allOptions.filter((o) =>
+      const candidates = allOptions.filter((o) =>
         valid.includes(o.handler) && o.format.mime === target.format.mime && o.format.to
-      )) {
+      );
+      // Several formats can share a MIME type (e.g. mp3 and mp2 are both
+      // audio/mpeg). Prefer the exact format the user picked so the output
+      // matches their choice, falling back to MIME-compatible alternatives.
+      candidates.sort((a, b) =>
+        (a.format.format === target.format.format ? 0 : 1)
+        - (b.format.format === target.format.format ? 0 : 1)
+      );
+      for (const c of candidates) {
         pathsExplored++;
         progress?.onRouteProgress?.({
           phase: "searching",
@@ -471,6 +536,18 @@ export async function runConversion(params: {
     inputData, outputOption, [[inputOption]], simpleMode, allOptions, progress
   );
   if (!output) throw new Error("Failed to find conversion route.");
+
+  // When a single source file expands into several output files (e.g. a PDF
+  // rendered to one image per page), bundle them into a single ZIP so the user
+  // gets one tidy download instead of a pile of loose files.
+  if (selectedFiles.length === 1 && output.files.length > 1) {
+    const zip = new JSZip();
+    for (const file of output.files) zip.file(file.name, new Uint8Array(file.bytes));
+    const bytes = await zip.generateAsync({ type: "uint8array" });
+    const baseName = (selectedFiles[0]?.name ?? "output").replace(/\.[^.]+$/, "");
+    const zipFile = toOutputFile({ name: `${baseName}.zip`, bytes }, "application/zip");
+    return { files: [...passthrough, zipFile], path: output.path };
+  }
 
   const outputFiles = output.files.map((f) => toOutputFile(f, outFmt.mime));
   return { files: [...passthrough, ...outputFiles], path: output.path };

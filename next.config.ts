@@ -6,6 +6,13 @@ const nextConfig: NextConfig = {
       ...config.experiments,
       asyncWebAssembly: true
     };
+    // pdf.js optionally pulls in the Node-only "canvas" package; it is unused
+    // in the browser, so stub it out to avoid resolution errors.
+    config.resolve = config.resolve || {};
+    config.resolve.alias = {
+      ...(config.resolve.alias || {}),
+      canvas: false
+    };
     return config;
   }
 };

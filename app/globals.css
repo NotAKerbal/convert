@@ -209,6 +209,130 @@ body {
   flex-shrink: 0;
 }
 
+/* ── category tiles (homepage type picker) ── */
+
+.category-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.category-tile {
+  --cat-color: var(--accent);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px 18px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 140ms, background 140ms, transform 80ms;
+}
+
+.category-tile:hover {
+  border-color: var(--cat-color);
+  background: color-mix(in srgb, var(--cat-color) 10%, var(--card));
+  transform: translateY(-2px);
+}
+
+.category-tile-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--cat-color) 16%, transparent);
+}
+
+.category-tile-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.category-tile-label {
+  font-size: 1.02rem;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.category-tile-count {
+  font-size: 0.76rem;
+  color: var(--text-sub);
+}
+
+/* ── category chips (output filter) ── */
+
+.category-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.category-chip {
+  --cat-color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-warm);
+  color: var(--text-sub);
+  font-size: 0.8rem;
+  font-weight: 650;
+  padding: 7px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 130ms, color 130ms, background 130ms;
+}
+
+.category-chip:hover {
+  color: var(--text);
+  border-color: var(--border-focus);
+}
+
+.category-chip.active {
+  border-color: var(--cat-color);
+  color: var(--text);
+  background: color-mix(in srgb, var(--cat-color) 16%, transparent);
+}
+
+.category-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.category-chip-count {
+  font-size: 0.72rem;
+  color: var(--text-sub);
+  background: var(--bg);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-weight: 700;
+}
+
+.category-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  color: var(--text-sub);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 0 12px;
+}
+
+.category-back:hover {
+  color: var(--text);
+}
+
 /* ── format grid ── */
 
 .format-grid {
