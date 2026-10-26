@@ -1,0 +1,154 @@
+/* Shared palette: controls and readable text change together in both modes. */
+:root {
+  --surface: #191614;
+  --surface-inset: #100f0e;
+  --surface-raised: #25211d;
+  --surface-hover: #302a24;
+  --header-surface: #100e0d;
+  --text-soft: #d4cdc3;
+  --text-muted: #a8a29e;
+  --text-faint: #8e887f;
+  --accent-readable: #edbf75;
+  --selection-bg: #24201a;
+  --selection-text: #f1cb8f;
+  --line-soft: #ffffff0d;
+  --line: #ffffff17;
+  --line-strong: #ffffff30;
+  --shadow: #0003;
+  --button-text: #151911;
+  --tool-amber: #e8b45f;
+  --tool-mint: #a4cdb2;
+  --tool-lavender: #b9a7d6;
+  --tool-blue: #9cb8d7;
+  --warm-card: #1b1713;
+  --warm-glow: #30251a80;
+  --green-card: #151b17;
+  --green-glow: #21342880;
+  --art-paper-top: #332d24;
+  --art-paper-bottom: #1b1814;
+  --art-fold: #3a3328;
+  --art-ink: #d4c8b5;
+  --art-label: #968a79;
+  --art-gold-top: #49371f;
+  --art-gold-bottom: #2c2418;
+  --art-gold-fold: #554022;
+  --art-gold-ink: #f0c678;
+  --green-text: #9fb59d;
+  --green-selected: #c3dfcc;
+  --green-selection-bg: #29352b;
+  --qr-stage: #121310;
+  --qr-dot: #ffffff0b;
+  --code-text: #b3c7da;
+  --error-text: #fda4af;
+}
+
+/* Follow the operating system, including changes while the app is open. */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #faf8f4;
+    --bg-warm: #f0ece5;
+    --card: #ffffff;
+    --card-hover: #f5f1eb;
+    --text: #29251f;
+    --text-sub: #635d55;
+    --accent: #985c0d;
+    --accent-soft: #a56c1412;
+    --accent-glow: #a56c1407;
+    --success: #187952;
+    --danger: #b73850;
+    --border: #4d3b2426;
+    --border-focus: #985c0d80;
+    --surface: #ffffff;
+    --surface-inset: #f6f3ee;
+    --surface-raised: #f0ebe3;
+    --surface-hover: #e9e2d7;
+    --header-surface: #fffdf9;
+    --text-soft: #514b42;
+    --text-muted: #635d55;
+    --text-faint: #71695e;
+    --accent-readable: #92560c;
+    --selection-bg: #f3e6ce;
+    --selection-text: #794a0c;
+    --line-soft: #4d3b2414;
+    --line: #4d3b2426;
+    --line-strong: #4d3b2445;
+    --shadow: #543e1814;
+    --button-text: #ffffff;
+    --tool-amber: #925a13;
+    --tool-mint: #346b48;
+    --tool-lavender: #7952a4;
+    --tool-blue: #3d668e;
+    --warm-card: #fffbf3;
+    --warm-glow: #f2dfbb60;
+    --green-card: #f5faf3;
+    --green-glow: #dceedd70;
+    --art-paper-top: #fcf9f2;
+    --art-paper-bottom: #e8e0d2;
+    --art-fold: #e4d9c6;
+    --art-ink: #605448;
+    --art-label: #786a56;
+    --art-gold-top: #f8e4bb;
+    --art-gold-bottom: #efd4a0;
+    --art-gold-fold: #e3c38b;
+    --art-gold-ink: #815416;
+    --green-text: #4d7253;
+    --green-selected: #2d5c3a;
+    --green-selection-bg: #e0eddf;
+    --qr-stage: #f1f5ee;
+    --qr-dot: #35442e15;
+    --code-text: #345f86;
+    --error-text: #aa2d42;
+  }
+
+  .tool-amber {
+    --tool-rgb: 146, 90, 19;
+  }
+
+  .tool-mint {
+    --tool-rgb: 52, 107, 72;
+  }
+
+  .tool-lavender {
+    --tool-rgb: 121, 82, 164;
+  }
+
+  .tool-blue {
+    --tool-rgb: 61, 102, 142;
+  }
+
+  /* The converter shares these tokens; generated images keep their own colors. */
+  .restart-btn,
+  .failure-list h3 {
+    color: var(--error-text);
+  }
+
+  .category-label {
+    color: var(--text-sub) !important;
+  }
+
+  .category-tile-icon,
+  .format-card .ext {
+    filter: brightness(0.65);
+  }
+
+  .results-title {
+    background: none;
+    -webkit-text-fill-color: var(--success);
+  }
+
+  .image-edit-panel,
+  .hero-icon-btn,
+  .aspect-btn {
+    background: var(--surface-inset);
+  }
+
+  .edit-busy {
+    background: #faf8f4dd;
+  }
+
+  .image-edit-surface {
+    background: repeating-conic-gradient(#dfd9cf 0 25%, #f6f3ee 0 50%) 0 / 22px
+      22px;
+  }
+}

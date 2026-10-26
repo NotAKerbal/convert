@@ -1,5 +1,5 @@
-import { ConverterApp } from "../src/components/ConverterApp";
+import { ToolsHome } from "../src/components/ToolsHome";
 
 export default function HomePage() {
-  return <ConverterApp />;
+  return <ToolsHome />;
 }
