@@ -57,6 +57,7 @@ const emptyLists: FormatLists = {
   outputIndices: [],
 };
 
+
 const BROWSE_CATEGORIES: FormatCategory[] = [
   "image",
   "audio",
@@ -66,24 +67,49 @@ const BROWSE_CATEGORIES: FormatCategory[] = [
   "other",
 ];
 
+// UI-only palette, tuned for legible text on the light workspace. The engine's
+// CATEGORY_META still supplies the labels.
+const CATEGORY_COLORS: Record<FormatCategory, string> = {
+  image: "#0e7490",
+  audio: "#7a3fb0",
+  video: "#be2f4a",
+  text: "#2d7a46",
+  application: "#2f5fbf",
+  other: "#6b6358",
+};
+
+function categoryStyle(category: FormatCategory): React.CSSProperties {
+  return { "--cat": CATEGORY_COLORS[category] } as React.CSSProperties;
+}
+
 interface CategoryCount {
   category: FormatCategory;
   label: string;
-  color: string;
   count: number;
+  examples: string[];
 }
 
 function countByCategory(indices: number[], allOptions: FormatOption[]): CategoryCount[] {
   const counts = new Map<FormatCategory, number>();
+  const examples = new Map<FormatCategory, string[]>();
   for (const idx of indices) {
     const opt = allOptions[idx];
     if (!opt) continue;
     const cat = getFormatCategory(opt.format.mime);
     counts.set(cat, (counts.get(cat) ?? 0) + 1);
+    const list = examples.get(cat) ?? [];
+    const tag = opt.format.format.toUpperCase();
+    if (list.length < 3 && !list.includes(tag)) list.push(tag);
+    examples.set(cat, list);
   }
   return BROWSE_CATEGORIES
     .filter((cat) => (counts.get(cat) ?? 0) > 0)
-    .map((cat) => ({ category: cat, ...CATEGORY_META[cat], count: counts.get(cat)! }));
+    .map((cat) => ({
+      category: cat,
+      label: CATEGORY_META[cat].label,
+      count: counts.get(cat)!,
+      examples: examples.get(cat) ?? [],
+    }));
 }
 
 function renderCategoryTiles(
@@ -94,24 +120,33 @@ function renderCategoryTiles(
     return <div className="empty">No matching formats found.</div>;
   }
   return (
-    <div className="category-tiles">
+    <ul className="category-tiles" aria-label="Format types">
       {counts.map((entry) => (
-        <button
-          key={entry.category}
-          className="category-tile"
-          style={{ "--cat-color": entry.color } as React.CSSProperties}
-          onClick={() => onPick(entry.category)}
-        >
-          <span className="category-tile-icon" style={{ color: entry.color }}>
-            <MediaIcon category={entry.category} />
-          </span>
-          <span className="category-tile-label">{entry.label}</span>
-          <span className="category-tile-count">
-            {entry.count} format{entry.count !== 1 ? "s" : ""}
-          </span>
-        </button>
+        <li key={entry.category}>
+          <button
+            type="button"
+            className="category-tile"
+            style={categoryStyle(entry.category)}
+            onClick={() => onPick(entry.category)}
+          >
+            <span className="category-tile-icon">
+              <MediaIcon category={entry.category} />
+            </span>
+            <span className="category-tile-text">
+              <span className="category-tile-label">{entry.label}</span>
+              <span className="category-tile-examples">
+                {entry.examples.join(", ")}
+                {entry.count > entry.examples.length ? "…" : ""}
+              </span>
+            </span>
+            <span className="category-tile-count">
+              {entry.count}
+              <span className="sr-only"> format{entry.count !== 1 ? "s" : ""}</span>
+            </span>
+          </button>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -123,9 +158,11 @@ function renderCategoryChips(
   if (counts.length <= 1) return null;
   const total = counts.reduce((sum, entry) => sum + entry.count, 0);
   return (
-    <div className="category-chips" role="tablist" aria-label="Filter by type">
+    <div className="category-chips" role="group" aria-label="Filter by type">
       <button
-        className={`category-chip${active === null ? " active" : ""}`}
+        type="button"
+        className="category-chip"
+        aria-pressed={active === null}
         onClick={() => onPick(null)}
       >
         All
@@ -133,18 +170,78 @@ function renderCategoryChips(
       </button>
       {counts.map((entry) => (
         <button
+          type="button"
           key={entry.category}
-          className={`category-chip${active === entry.category ? " active" : ""}`}
-          style={{ "--cat-color": entry.color } as React.CSSProperties}
+          className="category-chip"
+          aria-pressed={active === entry.category}
+          style={categoryStyle(entry.category)}
           onClick={() => onPick(active === entry.category ? null : entry.category)}
         >
-          <span className="category-chip-dot" style={{ background: entry.color }} />
+          <span className="category-chip-dot" aria-hidden="true" />
           {entry.label}
           <span className="category-chip-count">{entry.count}</span>
         </button>
       ))}
     </div>
   );
+}
+
+function SearchField({
+  label,
+  placeholder,
+  value,
+  onChange,
+  autoFocus,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+  autoFocus?: boolean;
+}) {
+  return (
+    <div className="search-field">
+      <label className="sr-only" htmlFor={`search-${label.replace(/\W+/g, "-").toLowerCase()}`}>
+        {label}
+      </label>
+      <Icon name="search" />
+      <input
+        id={`search-${label.replace(/\W+/g, "-").toLowerCase()}`}
+        className="search"
+        type="search"
+        placeholder={placeholder}
+        value={value}
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(e) => onChange(e.target.value)}
+        autoFocus={autoFocus}
+      />
+      {value && (
+        <button
+          type="button"
+          className="search-clear"
+          onClick={() => onChange("")}
+          aria-label={`Clear ${label.toLowerCase()}`}
+        >
+          <Icon name="x" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function totalSize(files: File[]) {
+  return files.reduce((sum, file) => sum + file.size, 0);
+}
+
+function fileExtension(name: string) {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && dot < name.length - 1 ? name.slice(dot + 1).slice(0, 5) : "file";
+}
+
+function prefersReducedMotion() {
+  return typeof window !== "undefined"
+    && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 }
 
 function renameBeforeExtension(name: string, suffix: string) {
@@ -169,7 +266,13 @@ function revokeOutputHistory(history: Record<number, OutputFile[]>) {
 
 export function ConverterApp() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const helpRef = useRef<HTMLDialogElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const convertBtnRef = useRef<HTMLButtonElement>(null);
+  const resultsTitleRef = useRef<HTMLHeadingElement>(null);
 
+  const [dragActive, setDragActive] = useState(false);
   const [simpleMode, setSimpleMode] = useState(true);
   const [loadingFormats, setLoadingFormats] = useState(true);
   const [converting, setConverting] = useState(false);
@@ -379,6 +482,62 @@ export function ConverterApp() {
       window.removeEventListener("paste", onPaste);
     };
   }, [selectFiles]);
+
+  // Highlight the page while files are dragged over it. dragenter/dragleave
+  // fire for every child element, so track depth rather than a boolean.
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+    const onEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth++;
+      setDragActive(true);
+    };
+    const onLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragActive(false);
+    };
+    const reset = () => {
+      depth = 0;
+      setDragActive(false);
+    };
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("drop", reset);
+    window.addEventListener("dragend", reset);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("drop", reset);
+      window.removeEventListener("dragend", reset);
+    };
+  }, []);
+
+  // ── focus management between steps ──
+
+  const previousStepRef = useRef<Step>("upload");
+  useEffect(() => {
+    const previous = previousStepRef.current;
+    previousStepRef.current = step;
+    if (previous === step) return;
+
+    if (step === "results") {
+      // Bring the results into view and announce them via the heading.
+      const panel = panelRef.current;
+      if (panel && panel.getBoundingClientRect().top < 0) {
+        panel.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+      }
+      resultsTitleRef.current?.focus({ preventScroll: true });
+    } else if (step === "ready" && previous === "pick-output") {
+      // The picked card collapses away; keep keyboard focus on the next action.
+      convertBtnRef.current?.focus();
+    }
+  }, [step]);
+
+  useEffect(() => {
+    if (popup.open && !popup.closable) popupRef.current?.focus({ preventScroll: true });
+  }, [popup.open, popup.closable]);
 
   // ── reachable output formats (hide routes we can't actually do) ──
 
@@ -618,6 +777,7 @@ export function ConverterApp() {
     });
   }, []);
 
+
   // ── render helpers ──
 
   const renderCard = (
@@ -625,22 +785,28 @@ export function ConverterApp() {
     option: FormatOption,
     isSelected: boolean,
     onSelect: () => void,
-    catColor: string
+    category: FormatCategory
   ) => (
     <button
+      type="button"
       key={index}
-      className={`format-card${isSelected ? " selected" : ""}`}
-      style={{ "--cat-color": catColor } as React.CSSProperties}
+      className="format-card"
+      aria-pressed={isSelected}
+      style={categoryStyle(category)}
       onClick={onSelect}
+      title={`${option.format.name} (${option.format.mime})`}
     >
-      <span className="ext" style={{ color: catColor }}>{option.format.extension.slice(0, 5)}</span>
-      <span className="label">
-        <span className="name">{option.format.format.toUpperCase()}</span>
-        <span className="mime">
+      <span className="format-ext" aria-hidden="true">{option.format.extension.slice(0, 5)}</span>
+      <span className="format-label">
+        <span className="format-name">{option.format.format.toUpperCase()}</span>
+        <span className="format-desc">
           {simpleMode
-            ? option.format.mime
-            : `${option.format.mime} \u00B7 ${option.handler.name}`}
+            ? option.format.name
+            : `${option.format.mime} · ${option.handler.name}`}
         </span>
+      </span>
+      <span className="format-check" aria-hidden="true">
+        <Icon name="check" />
       </span>
     </button>
   );
@@ -652,388 +818,812 @@ export function ConverterApp() {
   ) => (
     <div className="grouped-formats">
       {groups.map((group) => (
-        <div key={group.category} className="category-section">
-          <div className="category-label" style={{ color: group.color }}>
-            <span className="category-dot" style={{ background: group.color }} />
+        <section
+          key={group.category}
+          className="category-section"
+          style={categoryStyle(group.category)}
+          aria-label={`${group.label} formats`}
+        >
+          <h4 className="category-label">
+            <span className="category-dot" aria-hidden="true" />
             {group.label}
-          </div>
+            <span className="category-label-count">{group.indices.length}</span>
+          </h4>
           <div className="format-grid">
             {group.indices.map((idx) =>
-              renderCard(idx, lists.allOptions[idx], isSelectedFn(idx), () => onSelectFn(idx), group.color)
+              renderCard(idx, lists.allOptions[idx], isSelectedFn(idx), () => onSelectFn(idx), group.category)
             )}
           </div>
-        </div>
+        </section>
       ))}
-      {groups.length === 0 && <div className="empty">No matching formats found.</div>}
+      {groups.length === 0 && (
+        <div className="empty">
+          No matching formats. Try a different search{simpleMode ? " or switch to Advanced mode" : ""}.
+        </div>
+      )}
     </div>
   );
+
+  const openFilePicker = () => fileInputRef.current?.click();
 
   const inputOpt = selectedInputIdx !== null ? lists.allOptions[selectedInputIdx] : null;
   const inputSummaryLabel = canUseDetectedBatch
     ? `${detectedInputSummary.formatCount} input formats`
     : inputOpt?.format.format.toUpperCase();
 
-  return (
-    <main className="page">
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        style={{ display: "none" }}
-        onChange={(e) => {
-          if (e.target.files) selectFiles(Array.from(e.target.files));
-          // Allow re-selecting the same file later (e.g. after "Start Over").
-          e.target.value = "";
-        }}
-      />
+  const detectedByFile = new Map(
+    detectedInputSummary.detected.map((entry) => [entry.file, entry.option] as const)
+  );
 
-      {/* ── Header ── */}
-      <header className="header">
-        <h1>Convert to it!</h1>
-        <div className="header-actions">
-          {backgroundLoading && !popup.open && (
-            <span className="bg-loading" title="Loading conversion engines in the background">
-              <span className="bg-loading-dot" />
-              Warming up tools...
-            </span>
-          )}
-          {step !== "upload" && (
-            <button className="restart-btn" onClick={restart}>Restart</button>
-          )}
-          <button
-            className="mode-toggle"
-            onClick={() => setSimpleMode((v) => !v)}
-            disabled={loadingFormats || converting}
-          >
-            {simpleMode ? "Advanced" : "Simple"}
+  const renderFileSummary = (showChange: boolean) => {
+    const MAX_FILES = 4;
+    const visible = selectedFiles.slice(0, MAX_FILES);
+    return (
+      <div className="file-summary">
+        <div className="file-summary-head">
+          <p className="file-summary-title">
+            {selectedFiles.length} file{selectedFiles.length !== 1 ? "s" : ""}
+            <span className="file-summary-size"> &middot; {formatFileSize(totalSize(selectedFiles))}</span>
+          </p>
+          <button type="button" className="btn btn-quiet btn-sm" onClick={openFilePicker}>
+            <Icon name="refresh" />
+            Replace files
           </button>
         </div>
-      </header>
-
-      {/* ── Step 1: Upload ── */}
-      {step === "upload" && (
-        <>
-          <div
-            className={`drop-zone${selectedFiles.length > 0 ? " has-file" : ""}`}
-            onClick={() => fileInputRef.current?.click()}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") fileInputRef.current?.click();
-            }}
-          >
-            {selectedFiles.length === 0 ? (
+        <ul className="file-list">
+          {visible.map((file, i) => {
+            const detected = canUseDetectedBatch ? detectedByFile.get(file) : null;
+            return (
+              <li key={`${file.name}-${i}`} className="file-row">
+                <span className="file-ext" aria-hidden="true">{fileExtension(file.name)}</span>
+                <span className="file-name" title={file.name}>{file.name}</span>
+                <span className="file-meta">
+                  {detected && <span className="file-detected">{detected.format.format.toUpperCase()}</span>}
+                  {formatFileSize(file.size)}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        {selectedFiles.length > MAX_FILES && (
+          <p className="file-more">+ {selectedFiles.length - MAX_FILES} more</p>
+        )}
+        {showChange && (inputOpt || canUseDetectedBatch) && (
+          <div className="input-format-row">
+            <span className="input-format-label">From</span>
+            {inputOpt ? (
               <>
-                <h2>Click to add your files</h2>
-                <p>or drag &amp; drop it here &middot; paste also works</p>
+                <span
+                  className="format-pill"
+                  style={categoryStyle(getFormatCategory(inputOpt.format.mime))}
+                >
+                  {inputOpt.format.format.toUpperCase()}
+                </span>
+                <span className="input-format-name" title={inputOpt.format.name}>
+                  {inputOpt.format.name}
+                </span>
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => {
+                    setSelectedInputIdx(null);
+                    setSelectedOutputIndices(new Set());
+                    setOutputCollapsed(false);
+                  }}
+                  aria-label={`Change input format (currently ${inputOpt.format.format.toUpperCase()})`}
+                >
+                  Change
+                </button>
               </>
             ) : (
-              <div>
-                <h2>{selectedFiles[0].name}</h2>
-                {selectedFiles.length > 1 && <p>and {selectedFiles.length - 1} more</p>}
-                <p>Could not auto-detect format &mdash; please select below</p>
-              </div>
+              <span className="input-format-name">
+                {detectedInputSummary.formatCount} formats, detected per file
+              </span>
             )}
           </div>
+        )}
+      </div>
+    );
+  };
 
-          {!loadingFormats && lists.inputIndices.length > 0 && (
-            <section>
-              <div className="step-label">
-                {selectedFiles.length > 0 ? "Select input format" : "What are you converting?"}
-                {selectedFiles.length === 0 && !inputCategory && !searchInput.trim() && (
-                  <span className="bulk-hint">pick a type, or drop a file above</span>
-                )}
+  const stepIndex = step === "upload" ? 0 : step === "pick-output" ? 1 : step === "ready" ? 2 : 3;
+  const hasInput = selectedInputIdx !== null || canUseDetectedBatch;
+  const stepItems = [
+    {
+      label: "Add files",
+      detail: selectedFiles.length === 0
+        ? "Drop, paste or browse"
+        : !hasInput
+          ? "Pick the input format"
+          : `${selectedFiles.length} file${selectedFiles.length !== 1 ? "s" : ""} · ${inputSummaryLabel}`,
+    },
+    {
+      label: "Choose formats",
+      detail: selectedOutputIndices.size > 0
+        ? `${selectedOutputIndices.size} selected`
+        : "One or more targets",
+    },
+    {
+      label: "Convert & download",
+      detail: converting
+        ? "Converting…"
+        : step === "results"
+          ? results.length === 0
+            ? "Conversion failed"
+            : `${results.length} file${results.length !== 1 ? "s" : ""} ready${conversionFailures.length > 0 ? ` · ${conversionFailures.length} skipped` : ""}`
+          : "Runs on this device",
+    },
+  ];
+
+  const engineStatus = loadingFormats
+    ? { tone: "busy", label: "Loading formats" }
+    : backgroundLoading
+      ? { tone: "busy", label: "Warming up engines" }
+      : handlersReady
+        ? { tone: "ready", label: "Engines ready" }
+        : { tone: "idle", label: "Engines unavailable" };
+
+  const resultsTitle = results.length > 0
+    ? conversionFailures.length > 0
+      ? "Finished with some issues"
+      : "Conversion complete"
+    : "Conversion failed";
+
+  return (
+    <>
+      <div className="app-shell" inert={popup.open || undefined}>
+        <a className="skip-link" href="#converter">Skip to converter</a>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(e) => {
+            if (e.target.files) selectFiles(Array.from(e.target.files));
+            // Allow re-selecting the same file later (e.g. after "Start Over").
+            e.target.value = "";
+          }}
+        />
+
+        {dragActive && (
+          <div className="drag-overlay" aria-hidden="true">
+            <div className="drag-overlay-inner">
+              <Icon name="upload" />
+              <span>Drop to add files</span>
+            </div>
+          </div>
+        )}
+
+        {/* ── Top navigation ── */}
+        <header className="topbar">
+          <div className="topbar-inner">
+            <a className="brand" href="#converter" aria-label="Convert to it! - go to converter">
+              <span className="brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 32 32">
+                  <rect x="1" y="1" width="30" height="30" rx="9" fill="currentColor" />
+                  <path
+                    d="M10 11.5h9.5l-3-3M22 20.5h-9.5l3 3"
+                    fill="none"
+                    stroke="#fff"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </span>
+              <span className="brand-text">
+                <span className="brand-name">Convert to it!</span>
+                <span className="brand-tag">Universal file converter</span>
+              </span>
+            </a>
+
+            <nav className="topbar-actions" aria-label="App controls">
+              <span
+                className={`engine-status engine-status--${engineStatus.tone}`}
+                role="status"
+                title={backgroundLoading ? "Conversion engines are loading in the background" : undefined}
+              >
+                <span className="engine-status-dot" aria-hidden="true" />
+                <span className="engine-status-label">{engineStatus.label}</span>
+              </span>
+
+              <div className="mode-switch" role="group" aria-label="Format list mode">
+                <button
+                  type="button"
+                  aria-pressed={simpleMode}
+                  onClick={() => setSimpleMode(true)}
+                  disabled={loadingFormats || converting}
+                  title="Common formats, duplicates merged"
+                >
+                  Simple
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={!simpleMode}
+                  onClick={() => setSimpleMode(false)}
+                  disabled={loadingFormats || converting}
+                  title="Every format and conversion engine"
+                >
+                  Advanced
+                </button>
               </div>
-              <input
-                className="search"
-                placeholder="Search all formats..."
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                autoFocus={selectedFiles.length > 0}
-              />
-              {!searchInput.trim() && !inputCategory ? (
-                renderCategoryTiles(inputCategoryCounts, (cat) => setInputCategory(cat))
-              ) : (
+
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => helpRef.current?.showModal()}
+                aria-label="Help"
+                title="Help"
+              >
+                <Icon name="help" />
+              </button>
+              <a
+                className="icon-btn topbar-source"
+                href="https://github.com/p2r3/convert"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Source code on GitHub (opens in a new tab)"
+                title="Source code"
+              >
+                <Icon name="code" />
+              </a>
+            </nav>
+          </div>
+        </header>
+
+        <main className="main" id="main">
+          <h1 className="sr-only">File converter</h1>
+
+          {/* ── Progress steps ── */}
+          <ol className="stepper" aria-label="Conversion steps">
+            {stepItems.map((item, i) => {
+              const state = i === 2 && step === "results" && results.length === 0
+                ? "failed"
+                : i < stepIndex ? "done" : i === stepIndex ? "current" : "upcoming";
+              return (
+                <li
+                  key={item.label}
+                  className={`stepper-item stepper-item--${state}`}
+                  aria-current={state === "current" ? "step" : undefined}
+                >
+                  <span className="stepper-num" aria-hidden="true">
+                    {state === "done" ? <Icon name="check" /> : state === "failed" ? <Icon name="x" /> : i + 1}
+                  </span>
+                  <span className="stepper-text">
+                    <span className="stepper-label">
+                      {item.label}
+                      <span className="sr-only">
+                        {state === "done" ? " (complete)" : state === "failed" ? " (failed)" : state === "current" ? " (current step)" : ""}
+                      </span>
+                    </span>
+                    <span className="stepper-detail">{item.detail}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+
+          <div className="workspace" id="converter" tabIndex={-1}>
+            <section className="panel" aria-labelledby="panel-title" ref={panelRef}>
+              {/* ── Step 1: Upload ── */}
+              {step === "upload" && (
                 <>
-                  {inputCategory && !searchInput.trim() && (
-                    <button
-                      className="category-back"
-                      onClick={() => setInputCategory(null)}
+                  <div className="panel-head">
+                    <div>
+                      <p className="panel-kicker">Step 1 of 3</p>
+                      <h2 id="panel-title">
+                        {selectedFiles.length > 0 ? "Which format is this?" : "Add your files"}
+                      </h2>
+                    </div>
+                    {selectedFiles.length > 0 && (
+                      <button type="button" className="btn btn-quiet btn-sm" onClick={restart}>
+                        Start over
+                      </button>
+                    )}
+                  </div>
+
+                  {selectedFiles.length === 0 ? (
+                    <div
+                      className={`drop-zone${dragActive ? " drag-active" : ""}`}
+                      onClick={openFilePicker}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Choose files to convert"
+                      aria-describedby="drop-zone-hint"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openFilePicker();
+                        }
+                      }}
                     >
-                      &larr; All types
-                    </button>
+                      <span className="drop-zone-icon" aria-hidden="true">
+                        <Icon name="file-upload" />
+                      </span>
+                      <span className="drop-zone-title">Drop files here</span>
+                      <span className="drop-zone-hint" id="drop-zone-hint">
+                        or paste from your clipboard. Multiple files and mixed types work too.
+                      </span>
+                      <span className="btn btn-primary drop-zone-btn" aria-hidden="true">
+                        <Icon name="plus" />
+                        Choose files
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      {renderFileSummary(false)}
+                      <div className="notice notice--warn" role="status">
+                        <Icon name="alert" />
+                        <p>
+                          {detectedInputSummary.missing.length === 0
+                            ? "Choose which input format to read your files as."
+                            : selectedFiles.length > 1
+                              ? `We couldn’t recognise ${detectedInputSummary.missing.length} of these files automatically. Choose the input format below.`
+                              : "We couldn’t recognise this file automatically. Choose its input format below."}
+                        </p>
+                      </div>
+                    </>
                   )}
-                  {renderGroupedGrid(
-                    inputGroups,
-                    (idx) => idx === selectedInputIdx,
-                    selectedFiles.length > 0
-                      ? (idx) => setSelectedInputIdx(idx)
-                      : () => fileInputRef.current?.click()
+
+                  {!loadingFormats && lists.inputIndices.length > 0 && (
+                    <section className="format-browser" aria-labelledby="input-browser-title">
+                      <div className="section-head">
+                        <h3 id="input-browser-title">
+                          {selectedFiles.length > 0 ? "Select input format" : "What are you converting?"}
+                        </h3>
+                        <p className="section-hint" aria-live="polite">
+                          {selectedFiles.length === 0 && !inputCategory && !searchInput.trim()
+                            ? "Browse supported formats. Picking one opens the file chooser."
+                            : `${filteredInputs.length} format${filteredInputs.length !== 1 ? "s" : ""}`}
+                        </p>
+                      </div>
+                      <SearchField
+                        label="Search input formats"
+                        placeholder="Search formats, e.g. png, mp4, docx"
+                        value={searchInput}
+                        onChange={setSearchInput}
+                        autoFocus={selectedFiles.length > 0}
+                      />
+                      {!searchInput.trim() && !inputCategory ? (
+                        renderCategoryTiles(inputCategoryCounts, (cat) => setInputCategory(cat))
+                      ) : (
+                        <>
+                          {inputCategory && !searchInput.trim() && (
+                            <button
+                              type="button"
+                              className="category-back"
+                              onClick={() => setInputCategory(null)}
+                            >
+                              <Icon name="arrow-left" />
+                              All types
+                            </button>
+                          )}
+                          {renderGroupedGrid(
+                            inputGroups,
+                            (idx) => idx === selectedInputIdx,
+                            selectedFiles.length > 0
+                              ? (idx) => setSelectedInputIdx(idx)
+                              : () => openFilePicker()
+                          )}
+                        </>
+                      )}
+                    </section>
+                  )}
+                  {loadingFormats && (
+                    <div className="loading-row" role="status">
+                      <span className="spinner" aria-hidden="true" />
+                      Loading supported formats&hellip;
+                    </div>
                   )}
                 </>
               )}
-            </section>
-          )}
-        </>
-      )}
 
-      {/* ── Step 2: Pick output ── */}
-      {step === "pick-output" && (
-        <>
-          <div
-            className="drop-zone has-file"
-            onClick={() => fileInputRef.current?.click()}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") fileInputRef.current?.click();
-            }}
-          >
-            <div>
-              <h2>{selectedFiles[0]?.name}</h2>
-              {selectedFiles.length > 1 && <p>and {selectedFiles.length - 1} more</p>}
-              {inputOpt && (
-                <p>
-                  Detected as <strong>{inputOpt.format.format.toUpperCase()}</strong>
-                  {" "}
-                  <button
-                    className="change-format-link"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedInputIdx(null);
-                      setSelectedOutputIndices(new Set());
-                      setOutputCollapsed(false);
-                    }}
-                  >
-                    Change
-                  </button>
-                </p>
-              )}
-              {!inputOpt && canUseDetectedBatch && (
-                <p>
-                  Detected <strong>{detectedInputSummary.formatCount} input formats</strong>
-                  {" "}across {selectedFiles.length} files
-                </p>
-              )}
-            </div>
-          </div>
-
-          <button className="change-link" onClick={restart}>&larr; Choose a different file</button>
-
-          <section style={{ marginTop: 20 }}>
-            <div className="step-label">
-              Convert to
-              <span className="bulk-hint">select one or more formats</span>
-            </div>
-            <input
-              className="search"
-              placeholder="Search output formats..."
-              value={searchOutput}
-              onChange={(e) => setSearchOutput(e.target.value)}
-              autoFocus
-            />
-            {renderCategoryChips(outputCategoryCounts, outputCategory, setOutputCategory)}
-            {renderGroupedGrid(
-              outputGroups,
-              (idx) => selectedOutputIndices.has(idx),
-              (idx) => toggleOutput(idx, true)
-            )}
-          </section>
-        </>
-      )}
-
-      {/* ── Step 3: Ready to convert ── */}
-      {step === "ready" && (inputOpt || canUseDetectedBatch) && (
-        <>
-          <div className="summary">
-            <span className="tag">{inputSummaryLabel}</span>
-            <span className="arrow">&rarr;</span>
-            <span className="tag-group">
-              {Array.from(selectedOutputIndices).map((idx) => {
-                const opt = lists.allOptions[idx];
-                return (
-                  <span key={idx} className="tag">
-                    {opt.format.format.toUpperCase()}
-                    <button
-                      className="tag-remove"
-                      onClick={() => toggleOutput(idx)}
-                      title="Remove"
-                    >
-                      &times;
+              {/* ── Steps 2 & 3: pick outputs, then convert ── */}
+              {(step === "pick-output" || (step === "ready" && (inputOpt || canUseDetectedBatch))) && (
+                <>
+                  <div className="panel-head">
+                    <div>
+                      <p className="panel-kicker">Step {step === "ready" ? 3 : 2} of 3</p>
+                      <h2 id="panel-title">
+                        {step === "ready" ? "Ready to convert" : "Choose output formats"}
+                      </h2>
+                    </div>
+                    <button type="button" className="btn btn-quiet btn-sm" onClick={restart}>
+                      Start over
                     </button>
-                  </span>
-                );
-              })}
-            </span>
-          </div>
+                  </div>
 
-          <div className="summary-meta">
-            <p>
-              {selectedFiles[0]?.name}
-              {selectedFiles.length > 1 ? ` + ${selectedFiles.length - 1} more` : ""}
-            </p>
-            <button className="change-link" onClick={restart}>Change file</button>
-          </div>
+                  {renderFileSummary(true)}
 
-          <button
-            className="convert-btn"
-            onClick={onConvert}
-            disabled={converting || loadingFormats}
-          >
-            {converting
-              ? "Converting\u2026"
-              : selectedOutputIndices.size > 1
-                ? `Convert to ${selectedOutputIndices.size} formats`
-                : "Convert Now"}
-          </button>
-
-          <section style={{ marginTop: 24 }}>
-            <button
-              className="collapsible-toggle"
-              onClick={() => setOutputCollapsed((v) => !v)}
-            >
-              <span className={`chevron${outputCollapsed ? "" : " open"}`}>&#9654;</span>
-              {outputCollapsed ? "Show output formats" : "Hide output formats"}
-            </button>
-
-            {!outputCollapsed && (
-              <>
-                <input
-                  className="search"
-                  placeholder="Search output formats..."
-                  value={searchOutput}
-                  onChange={(e) => setSearchOutput(e.target.value)}
-                  style={{ marginTop: 8 }}
-                />
-                {renderCategoryChips(outputCategoryCounts, outputCategory, setOutputCategory)}
-                {renderGroupedGrid(
-                  outputGroups,
-                  (idx) => selectedOutputIndices.has(idx),
-                  (idx) => toggleOutput(idx)
-                )}
-              </>
-            )}
-          </section>
-        </>
-      )}
-
-      {/* ── Step 4: Results ── */}
-      {step === "results" && (
-        <section className="results-section">
-          <h2 className="results-title">
-            {results.length > 0
-              ? conversionFailures.length > 0
-                ? "Conversion Finished"
-                : "Conversion Complete"
-              : "Conversion Failed"}
-          </h2>
-          {resultPath && <p className="results-path">Route: {resultPath}</p>}
-
-          {results.length > 0 && (
-            <div className="results-list">
-              {hasImageResults && (
-                <button
-                  className={`edit-outputs-toggle${editOutputsOpen ? " active" : ""}`}
-                  onClick={() => setEditOutputsOpen((open) => !open)}
-                >
-                  <HeroIcon name="sparkles" />
-                  <span>Edit outputs</span>
-                </button>
-              )}
-              {results.map((file, i) => {
-                const preview = getPreviewKind(file.mime);
-                if (preview === "image") {
-                  return (
-                    <ImageResultCard
-                      key={i}
-                      file={file}
-                      editOpen={editOutputsOpen}
-                      canUndo={(outputHistory[i]?.length ?? 0) > 0}
-                      onEdited={(originalFile, editedFile) => replaceEditedOutput(i, originalFile, editedFile)}
-                      onUndo={() => undoEditedOutput(i)}
-                    />
-                  );
-                }
-                return (
-                  <div key={i} className="result-card">
-                    {preview && (
-                      <div className="result-preview">
-                        {preview === "audio" && (
-                          <audio controls src={file.url} />
+                  {step === "ready" && (
+                    <div className="convert-card">
+                      <div className="route-summary">
+                        <span className="route-summary-from">{inputSummaryLabel}</span>
+                        <Icon name="arrow-right" />
+                        <ul className="tag-group" aria-label="Selected output formats">
+                          {Array.from(selectedOutputIndices).map((idx) => {
+                            const opt = lists.allOptions[idx];
+                            if (!opt) return null;
+                            const tag = opt.format.format.toUpperCase();
+                            return (
+                              <li
+                                key={idx}
+                                className="tag"
+                                style={categoryStyle(getFormatCategory(opt.format.mime))}
+                              >
+                                {tag}
+                                <button
+                                  type="button"
+                                  className="tag-remove"
+                                  onClick={() => toggleOutput(idx)}
+                                  aria-label={`Remove ${tag}`}
+                                  title="Remove"
+                                  disabled={converting}
+                                >
+                                  <Icon name="x" />
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                      <button
+                        type="button"
+                        ref={convertBtnRef}
+                        className="btn btn-primary btn-lg convert-btn"
+                        onClick={onConvert}
+                        disabled={converting || loadingFormats}
+                      >
+                        {converting ? (
+                          <>
+                            <span className="spinner spinner--light" aria-hidden="true" />
+                            Converting&hellip;
+                          </>
+                        ) : (
+                          <>
+                            {selectedOutputIndices.size > 1
+                              ? `Convert to ${selectedOutputIndices.size} formats`
+                              : "Convert now"}
+                            <Icon name="arrow-right" />
+                          </>
                         )}
-                        {preview === "video" && (
-                          <video controls src={file.url} />
-                        )}
-                        {preview === "pdf" && (
-                          <iframe src={file.url} title={file.name} />
-                        )}
-                        {preview === "text" && (
-                          <TextPreview url={file.url} />
+                      </button>
+                    </div>
+                  )}
+
+                  <section className="format-browser" aria-labelledby="output-browser-title">
+                    <div className="section-head">
+                      <h3 id="output-browser-title">Convert to</h3>
+                      <p className="section-hint" aria-live="polite">
+                        {reachableOutputIndices.length === 0
+                          ? "No reachable output formats"
+                          : `${filteredOutputs.length} of ${reachableOutputIndices.length} reachable formats · select one or more`}
+                      </p>
+                      {step === "ready" && (
+                        <button
+                          type="button"
+                          className="btn btn-quiet btn-sm collapsible-toggle"
+                          aria-expanded={!outputCollapsed}
+                          aria-controls="output-format-list"
+                          onClick={() => setOutputCollapsed((v) => !v)}
+                        >
+                          <Icon name="chevron" className={`chevron${outputCollapsed ? "" : " open"}`} />
+                          {outputCollapsed ? "Add more formats" : "Hide formats"}
+                        </button>
+                      )}
+                    </div>
+
+                    {(step === "pick-output" || !outputCollapsed) && (
+                      <div id="output-format-list">
+                        <SearchField
+                          label="Search output formats"
+                          placeholder="Search output formats"
+                          value={searchOutput}
+                          onChange={setSearchOutput}
+                          autoFocus={step === "pick-output"}
+                        />
+                        {renderCategoryChips(outputCategoryCounts, outputCategory, setOutputCategory)}
+                        {renderGroupedGrid(
+                          outputGroups,
+                          (idx) => selectedOutputIndices.has(idx),
+                          (idx) => toggleOutput(idx, step === "pick-output")
                         )}
                       </div>
                     )}
-                    <div className="result-row">
-                      <div className="result-info">
-                        <span className="result-name">{file.name}</span>
-                        <span className="result-size">{formatFileSize(file.size)}</span>
+                  </section>
+                </>
+              )}
+
+              {/* ── Results ── */}
+              {step === "results" && (
+                <div className="results-section">
+                  <div className="panel-head">
+                    <div className="results-heading">
+                      <span
+                        className={`results-badge results-badge--${results.length === 0 ? "error" : conversionFailures.length > 0 ? "warn" : "ok"}`}
+                        aria-hidden="true"
+                      >
+                        <Icon name={results.length === 0 ? "x" : conversionFailures.length > 0 ? "alert" : "check"} />
+                      </span>
+                      <div>
+                        <p className="panel-kicker">
+                          {results.length} file{results.length !== 1 ? "s" : ""} ready
+                          {conversionFailures.length > 0 ? ` · ${conversionFailures.length} skipped` : ""}
+                        </p>
+                        <h2 id="panel-title" ref={resultsTitleRef} tabIndex={-1}>{resultsTitle}</h2>
                       </div>
-                      <button className="download-btn" onClick={() => downloadOutputFile(file)}>
-                        Download
-                      </button>
                     </div>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={restart}>
+                      <Icon name="refresh" />
+                      Convert more
+                    </button>
                   </div>
-                );
-              })}
-            </div>
-          )}
 
-          {conversionFailures.length > 0 && (
-            <div className="failure-list">
-              <h3>{conversionFailures.length} file{conversionFailures.length !== 1 ? "s" : ""} skipped</h3>
-              {conversionFailures.map((failure, i) => (
-                <div key={i} className="failure-row">
-                  <span className="failure-name">{failure.name}</span>
-                  <span className="failure-reason">{failure.reason}</span>
+                  {resultPath && (
+                    <p className="results-path">
+                      <span className="results-path-label">Route</span>
+                      <code>{resultPath}</code>
+                    </p>
+                  )}
+
+                  {results.length > 0 && (hasImageResults || results.length > 1) && (
+                    <div className="results-toolbar">
+                      {results.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => results.forEach((f) => downloadOutputFile(f))}
+                        >
+                          <Icon name="download" />
+                          Download all ({results.length})
+                        </button>
+                      )}
+                      {hasImageResults && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          aria-pressed={editOutputsOpen}
+                          onClick={() => setEditOutputsOpen((open) => !open)}
+                        >
+                          <Icon name="sparkles" />
+                          {editOutputsOpen ? "Done editing" : "Edit images"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {results.length > 0 && (
+                    <ul className="results-list">
+                      {results.map((file, i) => {
+                        const preview = getPreviewKind(file.mime);
+                        if (preview === "image") {
+                          return (
+                            <li key={i}>
+                              <ImageResultCard
+                                file={file}
+                                editOpen={editOutputsOpen}
+                                canUndo={(outputHistory[i]?.length ?? 0) > 0}
+                                onEdited={(originalFile, editedFile) => replaceEditedOutput(i, originalFile, editedFile)}
+                                onUndo={() => undoEditedOutput(i)}
+                              />
+                            </li>
+                          );
+                        }
+                        return (
+                          <li key={i}>
+                            <article className="result-card">
+                              {preview && (
+                                <div className={`result-preview result-preview--${preview}`}>
+                                  {preview === "audio" && (
+                                    <audio controls src={file.url} aria-label={`Preview of ${file.name}`} />
+                                  )}
+                                  {preview === "video" && (
+                                    <video controls src={file.url} aria-label={`Preview of ${file.name}`} />
+                                  )}
+                                  {preview === "pdf" && (
+                                    <iframe src={file.url} title={`Preview of ${file.name}`} />
+                                  )}
+                                  {preview === "text" && (
+                                    <TextPreview url={file.url} />
+                                  )}
+                                </div>
+                              )}
+                              <ResultRow file={file} />
+                            </article>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+
+                  {conversionFailures.length > 0 && (
+                    <div className="failure-list" role="alert">
+                      <h3>
+                        <Icon name="alert" />
+                        {results.length === 0
+                          ? "Nothing could be converted"
+                          : `${conversionFailures.length} conversion${conversionFailures.length !== 1 ? "s" : ""} skipped`}
+                      </h3>
+                      <ul>
+                        {conversionFailures.map((failure, i) => (
+                          <li key={i} className="failure-row">
+                            <span className="failure-name">{failure.name}</span>
+                            <span className="failure-reason">{failure.reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="failure-hint">
+                        Try a different output format{simpleMode ? ", or switch to Advanced mode to choose a specific engine" : ""}.
+                      </p>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
+              )}
+            </section>
 
-          {results.length > 1 && (
+            {/* ── Secondary context ── */}
+            <aside className="sidebar" aria-label="About this converter">
+              <section className="side-card" aria-labelledby="how-title">
+                <h2 id="how-title" className="side-title">How it works</h2>
+                <ol className="how-list">
+                  <li>
+                    <strong>Add files.</strong> Drop, paste or choose them. The format is detected
+                    automatically.
+                  </li>
+                  <li>
+                    <strong>Pick outputs.</strong> Only formats reachable from your input are shown.
+                    Select several to get them all at once.
+                  </li>
+                  <li>
+                    <strong>Convert.</strong> Preview, tweak images, and download each result.
+                  </li>
+                </ol>
+              </section>
+
+              <section className="side-card side-card--privacy" aria-labelledby="privacy-title">
+                <span className="side-icon" aria-hidden="true">
+                  <Icon name="shield" />
+                </span>
+                <div>
+                  <h2 id="privacy-title" className="side-title">Stays on your device</h2>
+                  <p>
+                    Conversions run entirely in your browser. Your files are not
+                    sent to a server.
+                  </p>
+                </div>
+              </section>
+
+              <section className="side-card" aria-labelledby="tips-title">
+                <h2 id="tips-title" className="side-title">Tips</h2>
+                <ul className="tip-list">
+                  <li>
+                    Paste files straight from your clipboard with <kbd>Ctrl</kbd>/<kbd>&#8984;</kbd> + <kbd>V</kbd>.
+                  </li>
+                  <li>Mixed batches convert each file from its own detected format.</li>
+                  <li>
+                    <strong>Advanced</strong> mode lists every engine, useful when a conversion
+                    doesn&rsquo;t turn out as expected.
+                  </li>
+                </ul>
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => helpRef.current?.showModal()}
+                >
+                  More help
+                </button>
+              </section>
+            </aside>
+          </div>
+        </main>
+
+        {/* ── Footer ── */}
+        <footer className="footer">
+          <p>
+            Original project by{" "}
+            <a href="https://github.com/p2r3/convert" target="_blank" rel="noopener noreferrer">
+              p2r3
+            </a>
+            . Built for files that stay yours.
+          </p>
+        </footer>
+      </div>
+
+      {/* ── Help ── */}
+      <dialog
+        ref={helpRef}
+        className="help-dialog"
+        aria-labelledby="help-title"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) e.currentTarget.close();
+        }}
+      >
+        <div className="help-inner">
+          <div className="help-head">
+            <h2 id="help-title">Using Convert to it!</h2>
             <button
-              className="download-all-btn"
-              onClick={() => results.forEach((f) => downloadOutputFile(f))}
+              type="button"
+              className="icon-btn"
+              onClick={() => helpRef.current?.close()}
+              aria-label="Close help"
             >
-              Download All ({results.length} files)
+              <Icon name="x" />
             </button>
-          )}
+          </div>
+          <div className="help-body">
+            <section>
+              <h3>Converting files</h3>
+              <ol>
+                <li>Drop files anywhere on the page, paste them, or use <strong>Choose files</strong>.</li>
+                <li>The input format is detected from the file type or extension. If it&rsquo;s wrong or missing, use <strong>Change</strong> and pick it yourself.</li>
+                <li>Select one or more output formats, then press <strong>Convert</strong>.</li>
+                <li>Preview each result and download it individually or all at once.</li>
+              </ol>
+            </section>
+            <section>
+              <h3>Simple and Advanced modes</h3>
+              <p>
+                <strong>Simple</strong> merges duplicate formats offered by different engines.
+                <strong> Advanced</strong> lists every format and engine separately, so you can
+                choose exactly which tool performs the conversion.
+              </p>
+            </section>
+            <section>
+              <h3>Several files at once</h3>
+              <p>
+                Files of the same type convert together. If you add different types, each file is
+                converted from its own detected format, and only outputs reachable from all of
+                them are offered.
+              </p>
+            </section>
+            <section>
+              <h3>Editing images</h3>
+              <p>
+                After converting to an image format, choose <strong>Edit images</strong> to crop or
+                remove a solid background. <strong>Undo</strong> restores the previous version.
+              </p>
+            </section>
+            <section>
+              <h3>Privacy</h3>
+              <p>
+                Conversion engines are downloaded to your browser and run there. Your files stay on
+                your device.
+              </p>
+            </section>
+          </div>
+        </div>
+      </dialog>
 
-          <button className="restart-btn-large" onClick={restart}>
-            Start Over
-          </button>
-        </section>
-      )}
-
-      {/* ── Footer ── */}
-      <footer className="footer">
-        Original project by{" "}
-        <a href="https://github.com/p2r3/convert" target="_blank" rel="noopener noreferrer">
-          p2r3
-        </a>
-        . This is a modern Next.js UI for his project, keeping all local-first conversion
-        features intact.
-      </footer>
-
-      {/* ── Popup ── */}
+      {/* ── Progress / status ── */}
       {popup.open && (
         <div className="popup-backdrop">
-          <div className="popup">
-            <h4>{popup.title}</h4>
-            {popup.routeProgress && <RoutePipeline progress={popup.routeProgress} />}
-            {popup.detail && !popup.routeProgress && <p>{popup.detail}</p>}
+          <div
+            className="popup"
+            role={popup.closable ? "alertdialog" : "dialog"}
+            aria-modal="true"
+            aria-labelledby="popup-title"
+            aria-describedby="popup-detail"
+            tabIndex={-1}
+            ref={popupRef}
+          >
+            {!popup.closable && <span className="spinner spinner--lg" aria-hidden="true" />}
+            {popup.closable && (
+              <span className="results-badge results-badge--error" aria-hidden="true">
+                <Icon name="alert" />
+              </span>
+            )}
+            <h2 id="popup-title" aria-live="polite">{popup.title}</h2>
+            <div id="popup-detail" aria-live="polite">
+              {popup.routeProgress && <RoutePipeline progress={popup.routeProgress} />}
+              {popup.detail && !popup.routeProgress && <p className="popup-detail">{popup.detail}</p>}
+            </div>
             {popup.closable && (
               <button
-                className="popup-btn"
+                type="button"
+                className="btn btn-primary"
+                autoFocus
                 onClick={() => setPopup((p) => ({ ...p, open: false }))}
               >
                 OK
@@ -1042,7 +1632,28 @@ export function ConverterApp() {
           </div>
         </div>
       )}
-    </main>
+    </>
+  );
+}
+
+function ResultRow({ file }: { file: OutputFile }) {
+  return (
+    <div className="result-row">
+      <span className="file-ext" aria-hidden="true">{fileExtension(file.name)}</span>
+      <div className="result-info">
+        <span className="result-name" title={file.name}>{file.name}</span>
+        <span className="result-size">{formatFileSize(file.size)}</span>
+      </div>
+      <button
+        type="button"
+        className="btn btn-primary btn-sm download-btn"
+        onClick={() => downloadOutputFile(file)}
+        aria-label={`Download ${file.name}`}
+      >
+        <Icon name="download" />
+        <span>Download</span>
+      </button>
+    </div>
   );
 }
 
@@ -1240,7 +1851,7 @@ function ImageResultCard({
   })();
 
   return (
-    <div className="result-card">
+    <article className={`result-card result-card--image${editOpen ? " is-editing" : ""}`}>
       <div
         className={`image-edit-surface${activeTool === "crop" ? " cropping" : ""}${pickingColor ? " picking" : ""}`}
         onPointerDown={(event) => {
@@ -1250,7 +1861,7 @@ function ImageResultCard({
         onPointerUp={stopCrop}
         onPointerCancel={stopCrop}
       >
-        <img ref={imageRef} src={file.url} alt={file.name} onLoad={onImageLoad} />
+        <img ref={imageRef} src={file.url} alt={`Preview of ${file.name}`} onLoad={onImageLoad} />
         {activeTool === "crop" && cropStyle && (
           <div className="crop-box" style={cropStyle} onPointerDown={startCropMove}>
             {(["nw", "ne", "sw", "se"] as CropResizeHandle[]).map((handle) => (
@@ -1264,11 +1875,16 @@ function ImageResultCard({
             ))}
           </div>
         )}
-        {editing && <div className="edit-busy">Editing...</div>}
+        {editing && (
+          <div className="edit-busy" role="status">
+            <span className="spinner" aria-hidden="true" />
+            Editing&hellip;
+          </div>
+        )}
       </div>
 
       {editOpen && (
-        <div className="image-edit-panel">
+        <div className="image-edit-panel" role="group" aria-label={`Edit ${file.name}`}>
           <div className="image-edit-actions">
             <IconButton
               label="Crop"
@@ -1282,7 +1898,7 @@ function ImageResultCard({
               }}
             />
             <IconButton
-              label="Remove"
+              label="Remove background"
               active={activeTool === "remove"}
               disabled={editing}
               icon="eraser"
@@ -1301,21 +1917,22 @@ function ImageResultCard({
 
           {activeTool === "crop" && (
             <div className="tool-settings">
-              <div className="aspect-buttons" aria-label="Crop aspect ratio">
+              <div className="aspect-buttons" role="group" aria-label="Crop aspect ratio">
                 {(["free", "1:1", "4:3", "16:9", "3:4"] as CropAspectRatio[]).map((ratio) => (
                   <button
                     key={ratio}
-                    className={`aspect-btn${aspectRatio === ratio ? " active" : ""}`}
+                    className="aspect-btn"
+                    aria-pressed={aspectRatio === ratio}
                     onClick={() => setAspectRatio(ratio)}
                     type="button"
                   >
-                    <HeroIcon name="crop" />
-                    <span>{ratio === "free" ? "Free" : ratio}</span>
+                    {ratio === "free" ? "Free" : ratio}
                   </button>
                 ))}
               </div>
               <IconButton
                 label="Apply crop"
+                primary
                 disabled={!cropRect || editing}
                 icon="check"
                 onClick={applyCrop}
@@ -1325,9 +1942,10 @@ function ImageResultCard({
 
           {activeTool === "remove" && (
             <div className="tool-settings">
-              <div className="remove-source-buttons" aria-label="Remove background source">
+              <div className="remove-source-buttons" role="group" aria-label="Remove background source">
                 <button
-                  className={`aspect-btn${removeSource === "corners" ? " active" : ""}`}
+                  className="aspect-btn"
+                  aria-pressed={removeSource === "corners"}
                   onClick={() => {
                     setRemoveSource("corners");
                     setPickingColor(false);
@@ -1336,11 +1954,12 @@ function ImageResultCard({
                   type="button"
                   disabled={editing}
                 >
-                  <HeroIcon name="sparkles" />
-                  <span>Corners</span>
+                  <Icon name="sparkles" />
+                  <span>From corners</span>
                 </button>
                 <button
-                  className={`aspect-btn${removeSource === "picked" ? " active" : ""}`}
+                  className="aspect-btn"
+                  aria-pressed={removeSource === "picked"}
                   onClick={() => {
                     setRemoveSource("picked");
                     setPickingColor(true);
@@ -1348,8 +1967,8 @@ function ImageResultCard({
                   type="button"
                   disabled={editing}
                 >
-                  <HeroIcon name="eyedropper" />
-                  <span>{pickingColor ? "Click image" : "Pick color"}</span>
+                  <Icon name="eyedropper" />
+                  <span>{pickingColor ? "Click the image" : "Pick a color"}</span>
                 </button>
               </div>
               <div className="background-tools">
@@ -1362,10 +1981,13 @@ function ImageResultCard({
                     value={tolerance}
                     onChange={(event) => setTolerance(Number(event.target.value))}
                   />
+                  <output className="tolerance-value">{tolerance}</output>
                 </label>
                 {targetColor && (
                   <span
                     className="picked-color"
+                    role="img"
+                    aria-label={`Picked color rgb(${targetColor[0]}, ${targetColor[1]}, ${targetColor[2]})`}
                     title={`rgb(${targetColor[0]}, ${targetColor[1]}, ${targetColor[2]})`}
                     style={{ backgroundColor: `rgb(${targetColor[0]}, ${targetColor[1]}, ${targetColor[2]})` }}
                   />
@@ -1374,86 +1996,157 @@ function ImageResultCard({
             </div>
           )}
 
-          {error && <p className="edit-error">{error}</p>}
+          {error && <p className="edit-error" role="alert">{error}</p>}
         </div>
       )}
 
-      <div className="result-row">
-        <div className="result-info">
-          <span className="result-name">{file.name}</span>
-          <span className="result-size">{formatFileSize(file.size)}</span>
-        </div>
-        <button className="download-btn" onClick={() => downloadOutputFile(file)}>
-          Download
-        </button>
-      </div>
-    </div>
+      <ResultRow file={file} />
+    </article>
   );
 }
 
 function IconButton({
   label,
   icon,
-  active = false,
+  active,
+  primary = false,
   disabled = false,
   onClick,
 }: {
   label: string;
-  icon: HeroIconName;
+  icon: IconName;
   active?: boolean;
+  primary?: boolean;
   disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
-      className={`hero-icon-btn${active ? " active" : ""}`}
+      className={`tool-btn${primary ? " tool-btn--primary" : ""}`}
       type="button"
       onClick={onClick}
       disabled={disabled}
-      title={label}
-      aria-label={label}
+      aria-pressed={active}
     >
-      <HeroIcon name={icon} />
+      <Icon name={icon} />
       <span>{label}</span>
     </button>
   );
 }
 
-type HeroIconName = "check" | "crop" | "eraser" | "eyedropper" | "sparkles" | "undo";
+type IconName =
+  | "alert"
+  | "arrow-left"
+  | "arrow-right"
+  | "check"
+  | "chevron"
+  | "code"
+  | "crop"
+  | "download"
+  | "eraser"
+  | "eyedropper"
+  | "file-upload"
+  | "help"
+  | "lock"
+  | "plus"
+  | "refresh"
+  | "search"
+  | "shield"
+  | "sparkles"
+  | "undo"
+  | "upload"
+  | "x";
 
-function HeroIcon({ name }: { name: HeroIconName }) {
-  const paths: Record<HeroIconName, React.ReactNode> = {
-    check: <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />,
-    crop: (
-      <>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v10.5A3.75 3.75 0 0 0 10.5 17.25H21" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 6.75h10.5A3.75 3.75 0 0 1 17.25 10.5V21" />
-      </>
-    ),
-    eraser: (
-      <>
-        <path strokeLinecap="round" strokeLinejoin="round" d="m16.5 8.25-8.25 8.25a3 3 0 0 0 4.24 4.24l8.25-8.25a3 3 0 0 0-4.24-4.24Z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="m12 12.75 4.25 4.25M3.75 21h9" />
-      </>
-    ),
-    eyedropper: (
-      <>
-        <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 5.25 3 3m-11.25 9 9.75-9.75a2.12 2.12 0 0 0-3-3L4.5 14.25V19.5h5.25Z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6 16.5 3.75 18.75" />
-      </>
-    ),
-    sparkles: (
-      <>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75 8.25 8.25 3.75 9.75l4.5 1.5 1.5 4.5 1.5-4.5 4.5-1.5-4.5-1.5-1.5-4.5Z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M18 12.75 17.25 15l-2.25.75 2.25.75L18 18.75l.75-2.25 2.25-.75-2.25-.75L18 12.75Z" />
-      </>
-    ),
-    undo: <path strokeLinecap="round" strokeLinejoin="round" d="M9 15 3.75 9.75 9 4.5M4.5 9.75H15a5.25 5.25 0 1 1 0 10.5h-2.25" />,
-  };
+const ICON_PATHS: Record<IconName, React.ReactNode> = {
+  alert: (
+    <>
+      <path d="M12 9v4M12 16.5h.01" />
+      <path d="M10.3 3.9 2.5 17.4A2 2 0 0 0 4.2 20.4h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+    </>
+  ),
+  "arrow-left": <path d="M19 12H5m6-6-6 6 6 6" />,
+  "arrow-right": <path d="M5 12h14m-6-6 6 6-6 6" />,
+  check: <path d="m4.5 12.75 6 6 9-13.5" />,
+  chevron: <path d="m9 5 7 7-7 7" />,
+  code: <path d="m8 7-5 5 5 5m8-10 5 5-5 5M13.5 4.5l-3 15" />,
+  crop: (
+    <>
+      <path d="M6.75 3v10.5A3.75 3.75 0 0 0 10.5 17.25H21" />
+      <path d="M3 6.75h10.5A3.75 3.75 0 0 1 17.25 10.5V21" />
+    </>
+  ),
+  download: <path d="M12 4v11m-5-5 5 5 5-5M4.5 19.5h15" />,
+  eraser: (
+    <>
+      <path d="m16.5 8.25-8.25 8.25a3 3 0 0 0 4.24 4.24l8.25-8.25a3 3 0 0 0-4.24-4.24Z" />
+      <path d="m12 12.75 4.25 4.25M3.75 21h9" />
+    </>
+  ),
+  eyedropper: (
+    <>
+      <path d="m15.75 5.25 3 3m-11.25 9 9.75-9.75a2.12 2.12 0 0 0-3-3L4.5 14.25V19.5h5.25Z" />
+      <path d="M6 16.5 3.75 18.75" />
+    </>
+  ),
+  "file-upload": (
+    <>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 3v5h5M12 17.5v-6m-2.75 2.75L12 11.5l2.75 2.75" />
+    </>
+  ),
+  help: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.4c-.7.3-1 .8-1 1.5v.3M12 16.8h.01" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="5" y="10.5" width="14" height="10" rx="2" />
+      <path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3" />
+    </>
+  ),
+  plus: <path d="M12 5v14M5 12h14" />,
+  refresh: (
+    <path d="M4.5 12a7.5 7.5 0 0 1 13-5.1L19.5 9M19.5 4.5V9H15M19.5 12a7.5 7.5 0 0 1-13 5.1L4.5 15M4.5 19.5V15H9" />
+  ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m20 20-4.4-4.4" />
+    </>
+  ),
+  shield: (
+    <>
+      <path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.4 7.5 9.5 4.3-1.1 7.5-4.9 7.5-9.5V6Z" />
+      <path d="m9 12 2.2 2.2L15.5 10" />
+    </>
+  ),
+  sparkles: (
+    <>
+      <path d="M9.75 3.75 8.25 8.25 3.75 9.75l4.5 1.5 1.5 4.5 1.5-4.5 4.5-1.5-4.5-1.5-1.5-4.5Z" />
+      <path d="M18 12.75 17.25 15l-2.25.75 2.25.75L18 18.75l.75-2.25 2.25-.75-2.25-.75L18 12.75Z" />
+    </>
+  ),
+  undo: <path d="M9 15 3.75 9.75 9 4.5M4.5 9.75H15a5.25 5.25 0 1 1 0 10.5h-2.25" />,
+  upload: <path d="M12 16V4.5m-5 5 5-5 5 5M4.5 19.5h15" />,
+  x: <path d="M6 6l12 12M18 6 6 18" />,
+};
 
+function Icon({ name, className }: { name: IconName; className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
-      {paths[name]}
+    <svg
+      className={`icon${className ? ` ${className}` : ""}`}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {ICON_PATHS[name]}
     </svg>
   );
 }
