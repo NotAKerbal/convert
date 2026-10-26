@@ -674,7 +674,7 @@ export function ConverterApp() {
     : inputOpt?.format.format.toUpperCase();
 
   return (
-    <main className="page">
+    <main className="page converter-page" id="main-content">
       <input
         ref={fileInputRef}
         type="file"
@@ -689,7 +689,10 @@ export function ConverterApp() {
 
       {/* ── Header ── */}
       <header className="header">
-        <h1>Convert to it!</h1>
+        <div>
+          <p className="eyebrow">FILES, REIMAGINED</p>
+          <h1>File converter</h1>
+        </div>
         <div className="header-actions">
           {backgroundLoading && !popup.open && (
             <span className="bg-loading" title="Loading conversion engines in the background">
