@@ -1,6 +1,30 @@
 # [Convert to it!](https://convert.to.it/)
 **Truly universal online file converter.**
 
+## Everyday toolkit
+
+The Next.js app now opens to a searchable tools homepage. Every tool processes content locally in your browser:
+
+- `/tools/convert` — the existing universal file converter, including batch conversion and image editing.
+- `/tools/qr-code` — QR codes for websites, text, Wi-Fi, and email, with color presets and PNG/SVG downloads.
+- `/tools/text` — word and character counts, case changes, whitespace cleanup, and text downloads.
+- `/tools/json` — JSON validation, formatting, minification, and downloads.
+
+Light and dark themes follow your system preference, including when it changes while the app is open. There is no theme selector or saved override.
+
+To add another tool, add its metadata to `src/lib/tools.ts`, create a route under `app/tools/`, and use `ToolPage` for the shared layout. The homepage directory automatically includes registered tools. Conversion engines only load on the converter page.
+
+### Next.js development
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. Run `npm run typecheck`, `npm test`, and `npm run build` to check changes. The original Vite app remains available separately; the toolkit homepage is part of the Next.js app.
+
+For Chrome integration checks, start the production app with `npm start -- --port 3100`, then run `npm run test:browser`. Override `TEST_BASE_URL` or `CHROME_PATH` if needed. The checks decode the generated QR images, verify downloads and text/JSON actions, check mobile layouts, and convert a generated PNG to JPEG.
+
 Many online file conversion tools are **boring** and **insecure**. They only allow conversion between two formats in the same medium (images to images, videos to videos, etc.), and they require that you _upload your files to some server_.
 
 This is not just terrible for privacy, it's also incredibly lame. What if you _really_ need to convert an AVI video to a PDF document? Try to find an online tool for that, I dare you.
