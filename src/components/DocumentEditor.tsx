@@ -124,11 +124,16 @@ export function DocumentEditor() {
 
   function command(name: string, value?: string) {
     if (!editor.current) return;
-    editor.current.focus();
     const current = window.getSelection();
-    if (selection.current && editor.current.contains(selection.current.commonAncestorContainer)) {
+    // A paste can arrive before selectionchange updates the saved toolbar range.
+    // Prefer the live selection, capturing it before focus can move the caret.
+    const range = current?.rangeCount && editor.current.contains(current.anchorNode) && editor.current.contains(current.focusNode)
+      ? current.getRangeAt(0).cloneRange()
+      : selection.current;
+    editor.current.focus();
+    if (range && editor.current.contains(range.commonAncestorContainer)) {
       current?.removeAllRanges();
-      current?.addRange(selection.current);
+      current?.addRange(range);
     }
     // Native editing commands retain the browser's undo history. Keep this
     // compatibility boundary small so it can be replaced independently.

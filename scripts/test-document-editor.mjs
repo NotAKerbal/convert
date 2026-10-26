@@ -129,6 +129,13 @@ try {
   // Paste strips rich markup while preserving literal text and undo history.
   await selectBody();
   await page.evaluate(() => {
+    // Paste immediately after changing the selection, before selectionchange
+    // can refresh a toolbar's saved range.
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector(".document-content"));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
     const clipboardData = new DataTransfer();
     clipboardData.setData("text/plain", "Pasted words");
     clipboardData.setData("text/html", '<img src="https://example.invalid/paste"><b>Pasted words</b>');
