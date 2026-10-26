@@ -76,6 +76,16 @@ The first Docker build is expected to be slow because Chromium and related syste
 
 ## Contributing
 
+### Branch workflow
+
+- `main` is the stable default branch and Vercel production branch.
+- `dev` is the integration branch for upcoming changes. Vercel deploys it as a preview.
+- Create feature and fix branches from `dev`, then open pull requests back into `dev`.
+- Release tested changes with a pull request from `dev` into `main`. Use a merge commit for releases so both long-lived branches retain their shared history.
+- For an urgent production fix, branch from `main`, open a pull request into `main`, then merge `main` back into `dev` through a pull request.
+
+Both long-lived branches require pull requests and resolved review conversations, and block force pushes and deletion. Reviewer approval is optional so a solo maintainer can merge their own work.
+
 The best way to contribute is by adding support for new file formats (duh). Here's how that works:
 
 ### Creating a handler
