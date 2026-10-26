@@ -6,17 +6,19 @@ function hasPrefix(bytes: Uint8Array, prefix: number[]) {
   return true;
 }
 
-function decodeUTF32(bytes: Uint8Array, littleEndian: boolean) {
+export function decodeUTF32(bytes: Uint8Array, littleEndian: boolean) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let out = "";
   for (let i = 0; i + 4 <= dv.byteLength; i += 4) {
     const cp = dv.getUint32(i, littleEndian);
-    out += String.fromCodePoint(cp);
+    // Invalid scalar values (out of range or lone surrogates) become U+FFFD.
+    const valid = cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff);
+    out += String.fromCodePoint(valid ? cp : 0xfffd);
   }
   return out;
 }
 
-function decodeUTF16(bytes: Uint8Array, littleEndian: boolean) {
+export function decodeUTF16(bytes: Uint8Array, littleEndian: boolean) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let out = "";
   for (let i = 0; i + 2 <= dv.byteLength; ) {
@@ -24,52 +26,42 @@ function decodeUTF16(bytes: Uint8Array, littleEndian: boolean) {
     i += 2;
     if (w1 >= 0xd800 && w1 <= 0xdbff && i + 2 <= dv.byteLength) {
       const w2 = dv.getUint16(i, littleEndian);
-      i += 2;
-      const cp = (((w1 - 0xd800) << 10) | (w2 - 0xdc00)) + 0x10000;
-      out += String.fromCodePoint(cp);
-    } else {
-      out += String.fromCharCode(w1);
+      if (w2 >= 0xdc00 && w2 <= 0xdfff) {
+        i += 2;
+        out += String.fromCodePoint((((w1 - 0xd800) << 10) | (w2 - 0xdc00)) + 0x10000);
+        continue;
+      }
     }
+    // Unpaired surrogates become U+FFFD.
+    out += String.fromCharCode(w1 >= 0xd800 && w1 <= 0xdfff ? 0xfffd : w1);
   }
   return out;
 }
 
-function encodeUTF16(str: string, littleEndian: boolean, addBOM = false) {
-  // count code units
-  const codepoints = Array.from(str);
-  // worst case 2 units per code point
-  const buf = new ArrayBuffer((codepoints.length * 2 + (addBOM ? 2 : 0)));
+export function encodeUTF16(str: string, littleEndian: boolean, addBOM = false) {
+  // A JS string's length is already its UTF-16 code unit count.
+  const buf = new ArrayBuffer(str.length * 2 + (addBOM ? 2 : 0));
   const dv = new DataView(buf);
   let offset = 0;
   if (addBOM) {
-    dv.setUint16(0, littleEndian ? 0xFF_FE : 0xFE_FF, false);
+    dv.setUint16(0, 0xfeff, littleEndian);
     offset += 2;
   }
-  for (const ch of codepoints) {
-    const cp = ch.codePointAt(0) || 0;
-    if (cp <= 0xffff) {
-      dv.setUint16(offset, cp, littleEndian);
-      offset += 2;
-    } else {
-      const v = cp - 0x10000;
-      const hi = 0xd800 + (v >> 10);
-      const lo = 0xdc00 + (v & 0x3ff);
-      dv.setUint16(offset, hi, littleEndian);
-      dv.setUint16(offset + 2, lo, littleEndian);
-      offset += 4;
-    }
+  for (let i = 0; i < str.length; i++) {
+    dv.setUint16(offset, str.charCodeAt(i), littleEndian);
+    offset += 2;
   }
   return new Uint8Array(buf, 0, offset);
 }
 
-function encodeUTF32(str: string, littleEndian: boolean, addBOM = false) {
+export function encodeUTF32(str: string, littleEndian: boolean, addBOM = false) {
   const codepoints = Array.from(str, (ch) => ch.codePointAt(0) || 0);
   const buf = new ArrayBuffer(codepoints.length * 4 + (addBOM ? 4 : 0));
   const dv = new DataView(buf);
   let offset = 0;
   if (addBOM) {
-    if (littleEndian) dv.setUint32(0, 0xFF_FE_00_00, true);
-    else dv.setUint32(0, 0x00_00_FE_FF, false);
+    // U+FEFF in the target byte order: FF FE 00 00 (LE) / 00 00 FE FF (BE).
+    dv.setUint32(0, 0xfeff, littleEndian);
     offset += 4;
   }
   for (const cp of codepoints) {
@@ -77,6 +69,16 @@ function encodeUTF32(str: string, littleEndian: boolean, addBOM = false) {
     offset += 4;
   }
   return new Uint8Array(buf, 0, offset);
+}
+
+/** Decodes text, sniffing a byte-order mark first (UTF-32 before UTF-16, since FF FE prefixes both). */
+export function decodeWithBOMDetection(bytes: Uint8Array) {
+  if (hasPrefix(bytes, [0xEF, 0xBB, 0xBF])) return decodeUsingTextDecoder(bytes.subarray(3), "utf-8");
+  if (hasPrefix(bytes, [0xFF, 0xFE, 0x00, 0x00])) return decodeUTF32(bytes.subarray(4), true);
+  if (hasPrefix(bytes, [0x00, 0x00, 0xFE, 0xFF])) return decodeUTF32(bytes.subarray(4), false);
+  if (hasPrefix(bytes, [0xFF, 0xFE])) return decodeUTF16(bytes.subarray(2), true);
+  if (hasPrefix(bytes, [0xFE, 0xFF])) return decodeUTF16(bytes.subarray(2), false);
+  return decodeUsingTextDecoder(bytes, "utf-8");
 }
 
 function decodeUsingTextDecoder(bytes: Uint8Array, label: string) {
@@ -114,12 +116,11 @@ export default class TextEncodingHandler implements FormatHandler {
       const inBytes = file.bytes;
       let text = "";
 
-      // Determine input encoding: prefer inputFormat.internal when present
+      // Determine input encoding. Generic "text" (the format any uploaded
+      // .txt maps to) sniffs the BOM so UTF-16/32 files decode correctly.
       const inf = (inputFormat && inputFormat.internal) || "";
-      if (inf === "text/utf8" || inf === "text/utf8NB") {
+      if (inf === "text/utf8NB" || inf === "text/utf8WB") {
         text = decodeUsingTextDecoder(inBytes, "utf-8");
-      } else if (inf === "text/utf8WB") {
-        text = decodeUsingTextDecoder(inBytes.subarray(3), "utf-8");
       } else if (inf === "text/utf16le") {
         text = decodeUTF16(inBytes, true);
       } else if (inf === "text/utf16be") {
@@ -129,22 +130,10 @@ export default class TextEncodingHandler implements FormatHandler {
       } else if (inf === "text/utf32be") {
         text = decodeUTF32(inBytes, false);
       } else {
-        // Try BOM detection
-        if (hasPrefix(inBytes, [0xEF, 0xBB, 0xBF])) {
-          text = decodeUsingTextDecoder(inBytes.subarray(3), "utf-8");
-        } else if (hasPrefix(inBytes, [0xFF, 0xFE, 0x00, 0x00])) {
-          text = decodeUTF32(inBytes.subarray(4), true);
-        } else if (hasPrefix(inBytes, [0x00, 0x00, 0xFE, 0xFF])) {
-          text = decodeUTF32(inBytes.subarray(4), false);
-        } else if (hasPrefix(inBytes, [0xFF, 0xFE])) {
-          text = decodeUTF16(inBytes.subarray(2), true);
-        } else if (hasPrefix(inBytes, [0xFE, 0xFF])) {
-          text = decodeUTF16(inBytes.subarray(2), false);
-        } else {
-          // default to utf-8
-          text = decodeUsingTextDecoder(inBytes, "utf-8");
-        }
+        text = decodeWithBOMDetection(inBytes);
       }
+      // Drop a decoded BOM so re-encoding doesn't produce two of them.
+      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
 
       // Now encode to output format
       const outf = (outputFormat && outputFormat.internal) || "text/utf8NB";

@@ -1,4 +1,7 @@
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
+import { decodeWithBOMDetection } from "./textEncoding.ts";
+
+import { bytesToBase64, canvasToBytes, loadImage, mimeLacksAlpha, replaceExtension } from "./handlerUtils.ts";
 
 class canvasToBlobLiteHandler implements FormatHandler {
 
@@ -81,53 +84,73 @@ class canvasToBlobLiteHandler implements FormatHandler {
     if (!this.#canvas || !this.#ctx) {
       throw "Handler not initialized.";
     }
+    const canvas = this.#canvas;
+    const ctx = this.#ctx;
+
+    if (inputFormat.mime === "text/plain" && outputFormat.mime === "text/plain") {
+      throw "Text to text is not an image conversion.";
+    }
 
     const outputFiles: FileData[] = [];
     for (const inputFile of inputFiles) {
 
       if (inputFormat.mime === "text/plain") {
         const font = "48px sans-serif";
-        const fontSize = parseInt(font);
-        const string = new TextDecoder().decode(inputFile.bytes);
+        const fontSize = 48;
+        const lineHeight = Math.floor(fontSize * 1.5);
+        const padding = Math.floor(fontSize / 2);
+        const lines = decodeWithBOMDetection(inputFile.bytes)
+          .replace(/\r\n?/g, "\n")
+          .replace(/\t/g, "    ")
+          .replace(/\n+$/, "")
+          .split("\n");
 
-        this.#ctx.font = font;
-        this.#canvas.width = this.#ctx.measureText(string).width;
-        this.#canvas.height = Math.floor(fontSize * 1.5);
+        ctx.font = font;
+        const textWidth = Math.max(...lines.map(line => ctx.measureText(line).width));
+        canvas.width = Math.max(1, Math.ceil(textWidth) + padding * 2);
+        canvas.height = lines.length * lineHeight + padding * 2;
 
-        if (outputFormat.mime === "image/jpeg") {
-          this.#ctx.fillStyle = "white";
-          this.#ctx.fillRect(0, 0, this.#canvas.width, this.#canvas.height);
-        }
-        this.#ctx.fillStyle = "black";
-        this.#ctx.strokeStyle = "white";
-        this.#ctx.font = font;
-        this.#ctx.fillText(string, 0, fontSize);
-        this.#ctx.strokeText(string, 0, fontSize);
-
-      } else {
-        const blob = new Blob([inputFile.bytes as BlobPart], { type: inputFormat.mime });
-        const url =
-          inputFormat.mime === "image/svg+xml"
-            ? `data:${inputFormat.mime};base64,${btoa(String.fromCharCode(...inputFile.bytes))}`
-            : URL.createObjectURL(blob);
-
-        const image = new Image();
-        await new Promise((resolve, reject) => {
-          image.addEventListener("load", resolve);
-          image.addEventListener("error", reject);
-          image.src = url;
+        // Resizing the canvas resets the context state.
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "black";
+        ctx.font = font;
+        ctx.textBaseline = "alphabetic";
+        lines.forEach((line, i) => {
+          ctx.fillText(line, padding, padding + i * lineHeight + fontSize);
         });
 
-        this.#canvas.width = image.naturalWidth;
-        this.#canvas.height = image.naturalHeight;
-        this.#ctx.drawImage(image, 0, 0);
+      } else {
+        // SVG goes through a data: URL so it isn't treated as cross-origin.
+        let image: HTMLImageElement;
+        if (inputFormat.mime === "image/svg+xml") {
+          image = new Image();
+          await new Promise((resolve, reject) => {
+            image.addEventListener("load", resolve);
+            image.addEventListener("error", () => reject("Failed to decode SVG image."));
+            image.src = `data:image/svg+xml;base64,${bytesToBase64(inputFile.bytes)}`;
+          });
+        } else {
+          image = await loadImage(inputFile.bytes, inputFormat.mime);
+        }
 
-        if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+        if (!image.naturalWidth || !image.naturalHeight) {
+          throw "Image has no intrinsic size.";
+        }
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (mimeLacksAlpha(outputFormat.mime)) {
+          // Transparent pixels would otherwise turn black.
+          ctx.fillStyle = "white";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        ctx.drawImage(image, 0, 0);
       }
 
       let bytes: Uint8Array;
       if (outputFormat.mime === "text/plain") {
-        const pixels = this.#ctx.getImageData(0, 0, this.#canvas.width, this.#canvas.height);
+        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const w = pixels.width;
         const h = pixels.height;
         const chars = " .:-=+*#%@";
@@ -145,16 +168,10 @@ class canvasToBlobLiteHandler implements FormatHandler {
         }
         bytes = new TextEncoder().encode(text);
       } else {
-        bytes = await new Promise((resolve, reject) => {
-          this.#canvas!.toBlob((blob) => {
-            if (!blob) return reject("Canvas output failed");
-            blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
-          }, outputFormat.mime);
-        });
+        bytes = await canvasToBytes(canvas, outputFormat.mime);
       }
 
-      const name = inputFile.name.split(".")[0] + "." + outputFormat.extension;
-      outputFiles.push({ bytes, name });
+      outputFiles.push({ bytes, name: replaceExtension(inputFile.name, outputFormat.extension) });
     }
 
     return outputFiles;

@@ -136,12 +136,30 @@ export async function loadCacheFromPublic() {
 }
 
 let handlersInitialized = false;
+const handlerInitializations = new WeakMap<FormatHandler, Promise<void>>();
+
+async function ensureHandlerReady(handler: FormatHandler): Promise<void> {
+  if (!handler.ready) {
+    let pending = handlerInitializations.get(handler);
+    if (!pending) {
+      pending = handler.init();
+      handlerInitializations.set(handler, pending);
+    }
+    try {
+      await pending;
+    } finally {
+      if (handlerInitializations.get(handler) === pending) handlerInitializations.delete(handler);
+    }
+    if (!handler.ready) throw new Error(`Handler "${handler.name}" did not become ready.`);
+  }
+  if (handler.supportedFormats) supportedFormatCache.set(handler.name, handler.supportedFormats);
+}
 
 export async function initHandlers() {
   if (handlersInitialized) return;
   for (const handler of handlers) {
     if (supportedFormatCache.has(handler.name)) continue;
-    try { await handler.init(); } catch (err) {
+    try { await ensureHandlerReady(handler); } catch (err) {
       console.warn(`Handler "${handler.name}" failed to initialize:`, err);
       continue;
     }
@@ -179,7 +197,7 @@ export function warmUpHandlers(onProgress?: (info: WarmUpProgress) => void): Pro
       const handler = handlers[i];
       if (!handler.ready) {
         try {
-          await handler.init();
+          await ensureHandlerReady(handler);
         } catch (err) {
           console.warn(`Handler "${handler.name}" failed to initialize:`, err);
         }
@@ -290,25 +308,12 @@ export function pickInputByFiles(
   inputIndices: number[]
 ) {
   const first = files[0];
-  let searchValue = "";
-  let selectedInputIndex: number | null = null;
-
-  const mime = normalizeMimeType(first.type);
-  const byMime = inputIndices.find((i) => allOptions[i]?.format.mime === mime);
-  if (mime && typeof byMime === "number") {
-    return { selectedInputIndex: byMime, searchValue: mime };
-  }
-
-  const ext = first.name.split(".").pop()?.toLowerCase() ?? "";
-  const byExt = inputIndices.find((i) => allOptions[i]?.format.extension.toLowerCase() === ext);
-  if (typeof byExt === "number") {
-    selectedInputIndex = byExt;
-    searchValue = allOptions[byExt]?.format.mime ?? ext;
-  } else {
-    searchValue = ext;
-  }
-
-  return { selectedInputIndex, searchValue };
+  if (!first) return { selectedInputIndex: null, searchValue: "" };
+  const option = pickInputByFile(first, allOptions, inputIndices);
+  return {
+    selectedInputIndex: option ? allOptions.indexOf(option) : null,
+    searchValue: option?.format.mime ?? first.name.split(".").pop()?.toLowerCase() ?? "",
+  };
 }
 
 export function pickInputByFile(
@@ -317,12 +322,14 @@ export function pickInputByFile(
   inputIndices: number[]
 ): FormatOption | null {
   const mime = normalizeMimeType(file.type);
+  // Extensions disambiguate formats sharing a MIME, and generic browser MIME
+  // labels such as text/plain must not turn a CSV or Markdown file into TXT.
+  const ext = file.name.includes(".") ? file.name.split(".").pop()!.toLowerCase() : "";
+  const byExt = inputIndices.filter((i) => ext && allOptions[i]?.format.extension.toLowerCase() === ext);
+  const preferred = byExt.find((i) => allOptions[i]?.format.mime === mime) ?? byExt[0];
+  if (preferred !== undefined) return allOptions[preferred] ?? null;
   const byMime = inputIndices.find((i) => allOptions[i]?.format.mime === mime);
-  if (mime && typeof byMime === "number") return allOptions[byMime] ?? null;
-
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  const byExt = inputIndices.find((i) => allOptions[i]?.format.extension.toLowerCase() === ext);
-  if (typeof byExt === "number") return allOptions[byExt] ?? null;
+  if (mime && mime !== "application/octet-stream" && typeof byMime === "number") return allOptions[byMime] ?? null;
 
   return null;
 }
@@ -352,11 +359,25 @@ export function getDetectedInputSummary(
 
 // ── conversion engine internals ──
 
-const conversionsFromAnyInput: ConvertPathNode[] = handlers
-  .filter((h) => h.supportAnyInput && h.supportedFormats)
-  .flatMap((h) => h.supportedFormats!.filter((f) => f.to).map((f) => ({ handler: h, format: f })));
+function sameFormat(a: FileFormat, b: FileFormat): boolean {
+  const canonical = (format: string) => ({ jpg: "jpeg", plain: "text" }[format] ?? format);
+  return a.mime === b.mime && canonical(a.format) === canonical(b.format);
+}
 
-const convertPathCache: Array<{ files: FileData[]; node: ConvertPathNode }> = [];
+function inputFormatFor(handler: FormatHandler, source: ConvertPathNode): FileFormat | undefined {
+  const formats = supportedFormatCache.get(handler.name) ?? [];
+  const candidates = formats.filter((f) => f.from && f.mime === source.format.mime);
+  return candidates.find((f) => sameFormat(f, source.format)
+    && (handler !== source.handler || f.internal === source.format.internal))
+    ?? candidates.find((f) => sameFormat(f, source.format))
+    ?? (candidates.length === 1 ? candidates[0] : undefined)
+    ?? (handler.supportAnyInput ? source.format : undefined);
+}
+
+function routeSignature(path: ConvertPathNode[]): string {
+  return JSON.stringify(path.map(({ handler, format }) =>
+    [handler.name, format.mime, format.format, format.internal]));
+}
 
 function buildRouteSteps(path: ConvertPathNode[]): RouteStep[] {
   return path.map((node, i) => ({
@@ -370,6 +391,7 @@ async function attemptConvertPath(
   files: FileData[],
   path: ConvertPathNode[],
   pathsExplored: number,
+  cache: Map<string, FileData[] | null>,
   progress?: ProgressCallbacks
 ) {
   const steps = buildRouteSteps(path);
@@ -382,12 +404,15 @@ async function attemptConvertPath(
     message: `Attempting ${steps.map((s) => s.format).join(" \u2192 ")}`,
   });
 
-  const cacheLast = convertPathCache.at(-1);
-  if (cacheLast) files = cacheLast.files;
-
-  const start = cacheLast ? convertPathCache.length : 0;
-  for (let i = start; i < path.length - 1; i++) {
+  for (let i = 0; i < path.length - 1; i++) {
     const handler = path[i + 1].handler;
+    const cacheKey = routeSignature(path.slice(0, i + 2));
+    if (cache.has(cacheKey)) {
+      const cached = cache.get(cacheKey);
+      if (!cached) return null;
+      files = cached;
+      continue;
+    }
 
     for (let s = 0; s <= i; s++) steps[s].status = "done";
     steps[i + 1].status = "active";
@@ -400,23 +425,24 @@ async function attemptConvertPath(
     });
 
     try {
-      let formats = supportedFormatCache.get(handler.name);
-      if (!handler.ready) {
-        try { await handler.init(); } catch { return null; }
-        if (handler.supportedFormats) {
-          supportedFormatCache.set(handler.name, handler.supportedFormats);
-          formats = handler.supportedFormats;
-        }
-      }
-      if (!formats) throw new Error(`Handler "${handler.name}" doesn't support any formats.`);
-      const inputFormat = formats.find((f) => f.mime === path[i].format.mime && f.from);
+      await ensureHandlerReady(handler);
+      const inputFormat = inputFormatFor(handler, path[i]);
       if (!inputFormat) throw new Error("Intermediate format not supported.");
-      files = await handler.doConvert(files, inputFormat, path[i + 1].format);
-      if (files.some((f) => !f.bytes.length)) throw new Error("Output is empty.");
-      convertPathCache.push({ files, node: path[i + 1] });
+      const outputFormat = handler.supportedFormats?.find((f) =>
+        f.to && f.internal === path[i + 1].format.internal && sameFormat(f, path[i + 1].format));
+      if (!outputFormat) throw new Error("Output format is no longer supported.");
+      files = await handler.doConvert(
+        files.map((file) => ({ name: file.name, bytes: new Uint8Array(file.bytes) })), inputFormat, outputFormat
+      );
+      if (!files.length) throw new Error("No output files were produced.");
+      if (!outputFormat.mime.startsWith("text/") && files.some((file) => !file.bytes.length)) {
+        throw new Error("Output is empty.");
+      }
+      cache.set(cacheKey, files);
 
       steps[i + 1].status = "done";
     } catch (err) {
+      cache.set(cacheKey, null);
       steps[i + 1].status = "failed";
       progress?.onRouteProgress?.({
         phase: "converting",
@@ -441,34 +467,23 @@ async function buildConvertPath(
   allOptions: FormatOption[],
   progress?: ProgressCallbacks
 ) {
-  convertPathCache.length = 0;
+  const cache = new Map<string, FileData[] | null>();
   const visited = new Set<string>();
-  const deadEnds = new Set<string>();
-  let nestedChecked = false;
   let pathsExplored = 0;
 
   while (queue.length > 0) {
     const path = queue.shift();
-    if (!path || path.length > 5) continue;
-
-    for (let i = 1; i < path.length; i++) {
-      if (path[i] !== convertPathCache[i]?.node) {
-        convertPathCache.length = i - 1;
-        break;
-      }
-    }
+    if (!path || path.length > 4) continue;
+    if (path.some((_, i) => i > 0 && cache.get(routeSignature(path.slice(0, i + 1))) === null)) continue;
 
     const prev = path[path.length - 1];
     const valid = handlers.filter((h) =>
-      supportedFormatCache.get(h.name)?.some((f) => f.mime === prev.format.mime && f.from)
+      !h.supportAnyInput && inputFormatFor(h, prev)
     );
-
-    if (!valid.length) { deadEnds.add(prev.format.format); continue; }
-    if (deadEnds.has(prev.format.format)) continue;
 
     if (simpleMode) {
       const candidates = allOptions.filter((o) =>
-        valid.includes(o.handler) && o.format.mime === target.format.mime && o.format.to
+        valid.includes(o.handler) && sameFormat(o.format, target.format) && o.format.to
       );
       // Several formats can share a MIME type (e.g. mp3 and mp2 are both
       // audio/mpeg). Prefer the exact format the user picked so the output
@@ -486,7 +501,7 @@ async function buildConvertPath(
           pathsExplored,
           message: `Searching... (${pathsExplored} routes explored, ${queue.length} queued)`,
         });
-        const r = await attemptConvertPath(files, path.concat(c), pathsExplored, progress);
+        const r = await attemptConvertPath(files, path.concat(c), pathsExplored, cache, progress);
         if (r) return r;
       }
     } else if (valid.includes(target.handler)) {
@@ -498,26 +513,27 @@ async function buildConvertPath(
         pathsExplored,
         message: `Searching... (${pathsExplored} routes explored, ${queue.length} queued)`,
       });
-      const r = await attemptConvertPath(files, path.concat(target), pathsExplored, progress);
+      const r = await attemptConvertPath(files, path.concat(target), pathsExplored, cache, progress);
       if (r) return r;
     }
 
-    if (!nestedChecked) {
-      for (const c of conversionsFromAnyInput.filter((e) => e.format.mime === target.format.mime)) {
+    if (path.length === 1) {
+      const anyInput = allOptions.filter((o) => o.handler.supportAnyInput && o.format.to
+        && sameFormat(o.format, target.format) && (simpleMode || o.handler === target.handler));
+      for (const c of anyInput) {
         pathsExplored++;
-        const r = await attemptConvertPath(files, path.concat(c), pathsExplored, progress);
+        const r = await attemptConvertPath(files, path.concat(c), pathsExplored, cache, progress);
         if (r) return r;
       }
-      nestedChecked = true;
     }
 
     for (const h of valid) {
       const fmts = supportedFormatCache.get(h.name);
       if (!fmts) continue;
       for (const f of fmts) {
-        if (!f.to || !f.mime || path.some((e) => e.format === f)) continue;
+        if (!f.to || !f.mime || path.some((e) => sameFormat(e.format, f))) continue;
         const np = path.concat({ format: f, handler: h });
-        const sig = np.map((e) => e.format.format).join("\u2022");
+        const sig = routeSignature(np);
         if (visited.has(sig)) continue;
         visited.add(sig);
         queue.push(np);
@@ -550,6 +566,7 @@ export async function runConversion(params: {
   progress?: ProgressCallbacks;
 }): Promise<ConvertResult> {
   const { selectedFiles, inputOption, outputOption, simpleMode, allOptions, progress } = params;
+  if (!selectedFiles.length) throw new Error("Select at least one input file.");
   const inFmt = inputOption.format;
   const outFmt = outputOption.format;
 
@@ -559,7 +576,8 @@ export async function runConversion(params: {
   for (const file of selectedFiles) {
     const buf = await file.arrayBuffer();
     const bytes = new Uint8Array(buf);
-    if (inFmt.mime === outFmt.mime) {
+    if (inputOption.handler === outputOption.handler && sameFormat(inFmt, outFmt)
+      && inFmt.internal === outFmt.internal && inFmt.extension === outFmt.extension) {
       passthrough.push(toOutputFile({ name: file.name, bytes }, inFmt.mime));
     } else {
       inputData.push({ name: file.name, bytes });

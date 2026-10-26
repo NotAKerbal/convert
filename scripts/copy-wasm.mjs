@@ -25,12 +25,13 @@ const targets = [
     destination: path.join(outDir, "ffmpeg-core.wasm")
   },
   {
-    source: path.join(root, "node_modules", "@ffmpeg", "core", "dist", "esm", "ffmpeg-core.worker.js"),
-    destination: path.join(outDir, "ffmpeg-core.worker.js")
-  },
-  {
     source: path.join(root, "node_modules", "@imagemagick", "magick-wasm", "dist", "magick.wasm"),
     destination: path.join(outDir, "magick.wasm")
+  },
+  {
+    // Loaded via `locateFile` in src/handlers/sqlite.ts.
+    source: path.join(root, "node_modules", "@sqlite.org", "sqlite-wasm", "dist", "sqlite3.wasm"),
+    destination: path.join(outDir, "sqlite3.wasm")
   },
   {
     source: path.join(root, "node_modules", "pdfjs-dist", "build", "pdf.worker.min.mjs"),

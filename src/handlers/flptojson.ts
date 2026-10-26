@@ -3,16 +3,17 @@
 
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
 import { Buffer } from "buffer";
+import { replaceExtension } from "./handlerUtils.ts";
 
 if (typeof window !== "undefined") {
   (window as any).Buffer = Buffer;
 }
 
-import { 
-  parseFlp, 
-  readProjectMeta, 
-  readProjectTimeInfo, 
-  listSamples, 
+import {
+  parseFlp,
+  readProjectMeta,
+  readProjectTimeInfo,
+  listSamples,
   listPlugins,
   getFlVersion,
   getPPQ
@@ -77,32 +78,34 @@ class flptojsonHandler implements FormatHandler {
         const timeInfo = readProjectTimeInfo(parsed);
         const samples = listSamples(parsed);
         const plugins = listPlugins(parsed);
-        
-        const version = getFlVersion(parsed) || "Unknown";
-        const ppq = getPPQ(parsed) || 96;
+
+        // Report missing fields as null rather than inventing values
+        // (the old defaults claimed e.g. 130 BPM for projects with no tempo).
+        const version = getFlVersion(parsed) ?? null;
+        const ppq = getPPQ(parsed) ?? null;
 
         // Construct JSON songData structure
         const songData = {
           meta: {
-            title: meta.name || "Untitled",
-            artist: meta.artist || "Unknown",
-            genre: meta.genre || "Unknown",
-            comments: meta.description || "",
-            bpm: meta.bpm || 130,
+            title: meta.name,
+            artist: meta.artist,
+            genre: meta.genre,
+            comments: meta.description,
+            bpm: meta.bpm,
             version: version,
             ppq: ppq
           },
           stats: {
-            created: timeInfo.creationDate instanceof Date 
-                ? timeInfo.creationDate.toISOString() 
+            created: timeInfo.creationDate instanceof Date
+                ? timeInfo.creationDate.toISOString()
                 : null,
-            workTimeSeconds: timeInfo.workTimeSeconds || 0
+            workTimeSeconds: timeInfo.workTimeSeconds
           },
           content: {
             samples: samples.map(s => s.path),
             plugins: plugins.map(p => ({
-              name: p.name || "Unknown",
-              vendor: p.vendor || "Unknown"
+              name: p.name,
+              vendor: p.vendor
             }))
           }
         };
@@ -112,12 +115,11 @@ class flptojsonHandler implements FormatHandler {
         const encoder = new TextEncoder();
         const outputBytes = encoder.encode(jsonString);
 
-        const baseName = inputFile.name.split(".")[0];
-        const newName = `${baseName}.json`;
+        const newName = replaceExtension(inputFile.name, "json");
 
-        outputFiles.push({ 
-          bytes: outputBytes, 
-          name: newName 
+        outputFiles.push({
+          bytes: outputBytes,
+          name: newName
         });
 
       } catch (e: any) { // Error handling

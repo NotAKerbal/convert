@@ -1,4 +1,5 @@
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
+import { canvasToBytes, mimeLacksAlpha, replaceExtension } from "./handlerUtils.ts";
 
 const TEXTUREFLAGS_ENVMAP = 0x00004000;
 const RESOURCE_HIGH_RES_IMAGE = 0x30;
@@ -752,7 +753,7 @@ function decodeSurface (
   }
 }
 
-function decodeVTF (bytes: Uint8Array): DecodedImage {
+export function decodeVTF (bytes: Uint8Array): DecodedImage {
   const header = parseHeader(bytes);
   const highResOffset = findHighResDataOffset(bytes, header);
   const faces = getFaces(header.flags);
@@ -863,14 +864,16 @@ class vtfHandler implements FormatHandler {
       this.#canvas.height = decoded.height;
       const imageData = new ImageData(new Uint8ClampedArray(decoded.pixels), decoded.width, decoded.height);
       this.#ctx.putImageData(imageData, 0, 0);
+      if (mimeLacksAlpha(outputFormat.mime)) {
+        // Paint white *behind* the texture so transparent texels don't turn black.
+        this.#ctx.globalCompositeOperation = "destination-over";
+        this.#ctx.fillStyle = "#ffffff";
+        this.#ctx.fillRect(0, 0, decoded.width, decoded.height);
+        this.#ctx.globalCompositeOperation = "source-over";
+      }
 
-      const bytes: Uint8Array = await new Promise((resolve, reject) => {
-        this.#canvas!.toBlob((blob) => {
-          if (!blob) return reject("Canvas output failed");
-          blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
-        }, outputFormat.mime);
-      });
-      const name = inputFile.name.split(".")[0] + "." + outputFormat.extension;
+      const bytes = await canvasToBytes(this.#canvas, outputFormat.mime);
+      const name = replaceExtension(inputFile.name, outputFormat.extension);
       outputFiles.push({ bytes, name });
     }
     return outputFiles;

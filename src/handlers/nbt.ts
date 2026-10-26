@@ -1,5 +1,22 @@
-import type { FileData, FileFormat, FormatHandler } from "src/FormatHandler";
+import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
 import * as NBT from "nbtify";
+import { replaceExtension } from "./handlerUtils.ts";
+
+/**
+ * JSON.stringify replacer for NBTify values: Long tags are BigInts (which
+ * JSON.stringify rejects) and array tags are typed arrays (which it would
+ * serialize as index-keyed objects).
+ */
+export function nbtJsonReplacer (_key: string, value: unknown): unknown {
+    if (typeof value === "bigint") {
+        return Number.isSafeInteger(Number(value)) ? Number(value) : value.toString();
+    }
+    if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+        return Array.from(value as unknown as ArrayLike<number | bigint>, (v) =>
+            typeof v === "bigint" ? nbtJsonReplacer("", v) : v);
+    }
+    return value;
+}
 
 class nbtHandler implements FormatHandler {
     public name: string = "nbt";
@@ -55,9 +72,9 @@ class nbtHandler implements FormatHandler {
         if (inputFormat.internal == "nbt" && outputFormat.internal == "json") {
             for (const file of inputFiles) {
                 const nbt = await NBT.read(file.bytes);
-                const j = JSON.stringify(nbt.data, null, this.indent)
+                const j = JSON.stringify(nbt.data, nbtJsonReplacer, this.indent)
                 outputFiles.push({
-                    name: file.name.split(".")[0] + ".json",
+                    name: replaceExtension(file.name, "json"),
                     bytes: encoder.encode(j)
                 })
             }
@@ -68,20 +85,20 @@ class nbtHandler implements FormatHandler {
                 const obj = JSON.parse(text)
                 const bd = await NBT.write(obj)
                 outputFiles.push({
-                    name: file.name.split(".")[0] + ".nbt",
+                    name: replaceExtension(file.name, "nbt"),
                     bytes: bd
                 })
             }
         }
-        
+
         // snbt <-> nbt
         if (inputFormat.internal == "snbt" && outputFormat.internal == "nbt") {
-            for (const file of inputFiles) { 
+            for (const file of inputFiles) {
                 const text = decoder.decode(file.bytes)
                 const nbt = NBT.parse(text)
                 const bd = await NBT.write(nbt)
                 outputFiles.push({
-                    name: file.name.split(".")[0] + ".nbt",
+                    name: replaceExtension(file.name, "nbt"),
                     bytes: bd
                 })
             }
@@ -93,7 +110,7 @@ class nbtHandler implements FormatHandler {
                     space: this.indent
                 })
                 outputFiles.push({
-                    name: file.name.split(".")[0] + ".snbt",
+                    name: replaceExtension(file.name, "snbt"),
                     bytes: encoder.encode(text)
                 })
             }
@@ -104,9 +121,9 @@ class nbtHandler implements FormatHandler {
             for (const file of inputFiles) {
                 const snbt = decoder.decode(file.bytes)
                 const nbt = NBT.parse(snbt)
-                const text = JSON.stringify(nbt, null, this.indent)
+                const text = JSON.stringify(nbt, nbtJsonReplacer, this.indent)
                 outputFiles.push({
-                    name: file.name.split(".")[0] + ".json",
+                    name: replaceExtension(file.name, "json"),
                     bytes: encoder.encode(text)
                 })
             }
@@ -119,12 +136,15 @@ class nbtHandler implements FormatHandler {
                     space: this.indent
                 })
                 outputFiles.push({
-                    name: file.name.split(".")[0] + ".snbt",
+                    name: replaceExtension(file.name, "snbt"),
                     bytes: encoder.encode(snbt)
                 })
             }
         }
 
+        if (outputFiles.length === 0) {
+            throw `nbt: unsupported conversion ${inputFormat.format} -> ${outputFormat.format}`;
+        }
         return outputFiles
       }
 }

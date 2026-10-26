@@ -2,7 +2,8 @@
 // npm install pe-library jszip buffer
 
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
-import * as Pe from "pe-library"; 
+import { stripExtension } from "./handlerUtils.ts";
+import * as Pe from "pe-library";
 import JSZip from "jszip";
 
 import { Buffer } from "buffer";
@@ -72,7 +73,7 @@ class peToZipHandler implements FormatHandler {
         //@ts-ignore
         const peFile = Pe.NtExecutable.from(buffer);
         const ntHeader = peFile.newHeader;
-        
+
         const subsystemValue = ntHeader.optionalHeader.subsystem;
         const subsystemMap: Record<number, string> = {
           1: "Native",
@@ -89,9 +90,7 @@ class peToZipHandler implements FormatHandler {
           compileTimestamp: new Date(ntHeader.fileHeader.timeDateStamp * 1000).toISOString(),
           subsystem: subsystemMap[subsystemValue] || `Unknown (${subsystemValue})`,
           imageBase: peFile.getImageBase(),
-          sectionAlignment: peFile.getSectionAlignment(),
-          imports: [] as any[],
-          exports: [] as any[]
+          sectionAlignment: peFile.getSectionAlignment()
         };
 
         zip.file("metadata.json", JSON.stringify(metadata, null, 2));
@@ -100,23 +99,23 @@ class peToZipHandler implements FormatHandler {
         const allSections = peFile.getAllSections();
 
         for (const section of allSections) {
-          const rawName = section.info.name.toString().replace(/\0/g, ''); 
+          const rawName = section.info.name.toString().replace(/\0/g, '');
           const safeName = rawName.replace(/[^a-zA-Z0-9]/g, '');
           const fileName = `section_${safeName || 'unnamed'}.bin`;
-          
+
           if (section.data) {
             zip.file(fileName, section.data);
           }
         }
-        
+
         // generate final ZIP
         const outputBytes = await zip.generateAsync({
           type: "uint8array",
           compression: "DEFLATE",
           compressionOptions: { level: 9 }
         });
-        
-        const baseName = inputFile.name.split(".")[0];
+
+        const baseName = stripExtension(inputFile.name);
         const newName = `${baseName}_pe_data.zip`;
 
         outputFiles.push({

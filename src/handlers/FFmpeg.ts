@@ -5,6 +5,7 @@ import type { LogEvent } from "@ffmpeg/ffmpeg";
 
 import mime from "mime";
 import normalizeMimeType from "../normalizeMimeType.ts";
+import { replaceExtension } from "./handlerUtils.ts";
 
 class FFmpegHandler implements FormatHandler {
 
@@ -15,18 +16,23 @@ class FFmpegHandler implements FormatHandler {
   #ffmpeg?: FFmpeg;
 
   #stdout: string = "";
-  handleStdout (log: LogEvent) {
+  // Bound once so `off()` removes the same listener `on()` added; binding
+  // inline leaked one listener per call and duplicated every log line.
+  #handleStdout = (log: LogEvent) => {
     this.#stdout += log.message + "\n";
-  }
+  };
   clearStdout () {
     this.#stdout = "";
   }
   async getStdout (callback: () => void | Promise<void>) {
     if (!this.#ffmpeg) return "";
     this.clearStdout();
-    this.#ffmpeg.on("log", this.handleStdout.bind(this));
-    await callback();
-    this.#ffmpeg.off("log", this.handleStdout.bind(this));
+    this.#ffmpeg.on("log", this.#handleStdout);
+    try {
+      await callback();
+    } finally {
+      this.#ffmpeg.off("log", this.#handleStdout);
+    }
     return this.#stdout;
   }
 
@@ -87,8 +93,24 @@ class FFmpegHandler implements FormatHandler {
     }
   }
 
-  async init () {
+  #initPromise?: Promise<void>;
 
+  /**
+   * Probing every muxer takes a while, and the background warm-up can overlap
+   * with a conversion that also calls `init()`. Share one in-flight run so two
+   * probes don't fight over (and terminate) the same FFmpeg instance.
+   */
+  init () {
+    this.#initPromise ??= this.#init().catch((e) => {
+      this.#initPromise = undefined;
+      throw e;
+    });
+    return this.#initPromise;
+  }
+
+  async #init () {
+
+    this.supportedFormats = [];
     this.#ffmpeg = new FFmpeg();
     await this.loadFFmpeg();
 
@@ -142,6 +164,12 @@ class FFmpegHandler implements FormatHandler {
           mimeType = mime.getType(format) || ("video/" + format);
         }
         mimeType = normalizeMimeType(mimeType);
+        // The shared Matroska/WebM demuxer reports Matroska's extension/MIME
+        // for both aliases. Preserve WebM's identity for browser detection.
+        if (format === "webm") {
+          extension = "webm";
+          mimeType = "video/webm";
+        }
 
         this.supportedFormats.push({
           name: description + (formats.length > 1 ? (" / " + format) : ""),
@@ -169,7 +197,8 @@ class FFmpegHandler implements FormatHandler {
     });
 
     // AV1 doesn't seem to be included in WASM FFmpeg
-    this.supportedFormats.splice(this.supportedFormats.findIndex(c => c.mime === "image/avif"), 1);
+    const avifIndex = this.supportedFormats.findIndex(c => c.mime === "image/avif");
+    if (avifIndex !== -1) this.supportedFormats.splice(avifIndex, 1);
 
     // Add .qta (QuickTime Audio) support - uses same mov demuxer
     this.supportedFormats.push({
@@ -181,6 +210,21 @@ class FFmpegHandler implements FormatHandler {
       to: true,
       internal: "mov"
     });
+
+    // These containers share demuxers but browsers use different MIME labels
+    // and extensions. Without input aliases, audio/ogg falls through to the
+    // spectrogram bridge and .webm/.oga/.opus files can go undetected.
+    for (const [format, extension, mimeType, internal] of [
+      ["webm", "webm", "audio/webm", "webm"],
+      ["ogg", "ogg", "audio/ogg", "ogg"],
+      ["oga", "oga", "audio/ogg", "ogg"],
+      ["ogv", "ogv", "video/ogg", "ogg"],
+      ["opus", "opus", "audio/ogg", "ogg"],
+      ["mp2", "mp2", "audio/mpeg", "mp3"],
+    ]) {
+      this.supportedFormats.push({ name: `${format.toUpperCase()} media`, format, extension,
+        mime: mimeType, internal, from: true, to: false });
+    }
 
     this.#ffmpeg.terminate();
 
@@ -197,6 +241,7 @@ class FFmpegHandler implements FormatHandler {
     if (!this.#ffmpeg) {
       throw "Handler not initialized.";
     }
+    if (inputFiles.length === 0) throw "No input files.";
 
     await this.reloadFFmpeg();
 
@@ -215,7 +260,18 @@ class FFmpegHandler implements FormatHandler {
     }
     await this.#ffmpeg.writeFile("list.txt", new TextEncoder().encode(listString));
 
-    const command = ["-hide_banner", "-f", "concat", "-safe", "0", "-i", "list.txt", "-f", outputFormat.internal];
+    // A single non-still input is opened directly: the concat demuxer only
+    // carries streams it can concatenate (it drops e.g. subtitles and data
+    // streams) and rewrites timestamps. Stills and multi-file input still need
+    // concat to become an image sequence.
+    // Headerless raw PCM can't be probed, so name its demuxer explicitly.
+    const rawDemuxer = /^([suf](8|16|24|32|64)(le|be)?|alaw|mulaw)$/.test(inputFormat.internal)
+      ? ["-f", inputFormat.internal]
+      : [];
+    const input = inputFiles.length === 1 && !forceFPS
+      ? [...rawDemuxer, "-i", "file_0." + inputFormat.extension]
+      : ["-f", "concat", "-safe", "0", "-i", "list.txt"];
+    const command = ["-hide_banner", ...input, "-f", outputFormat.internal];
     if (outputFormat.mime === "video/mp4") {
       command.push("-pix_fmt", "yuv420p");
     }
@@ -226,18 +282,29 @@ class FFmpegHandler implements FormatHandler {
     if (args) command.push(...args);
     command.push("output");
 
+    let exitCode = 0;
     const stdout = await this.getStdout(async () => {
-      await this.#ffmpeg!.exec(command);
+      exitCode = await this.#ffmpeg!.exec(command);
     });
 
     for (let i = 0; i < fileIndex; i ++) {
       const entryName = `file_${i}.${inputFormat.extension}`;
-      await this.#ffmpeg.deleteFile(entryName);
+      await this.#ffmpeg.deleteFile(entryName).catch(() => {});
     }
 
-    if (stdout.includes("Conversion failed!\n")) {
+    if (exitCode !== 0 || stdout.includes("Conversion failed!\n")) {
+      await this.#ffmpeg.deleteFile("list.txt").catch(() => {});
+      await this.#ffmpeg.deleteFile("output").catch(() => {});
 
       const oldArgs = args ? args : []
+      // Directly opened inputs keep subtitle/data streams the target
+      // container may not accept; retry without them.
+      if (
+        !oldArgs.includes("-sn")
+        && (stdout.includes("Could not find tag for codec") || stdout.includes("not currently supported in container"))
+      ) {
+        return this.doConvert(inputFiles, inputFormat, outputFormat, [...oldArgs, "-sn", "-dn"]);
+      }
       if (stdout.includes(" not divisible by") && !oldArgs.includes("-vf")) {
         const division = stdout.split(" not divisible by ")[1].split(" ")[0];
         return this.doConvert(inputFiles, inputFormat, outputFormat, [...oldArgs, "-vf", `pad=ceil(iw/${division})*${division}:ceil(ih/${division})*${division}`]);
@@ -252,7 +319,7 @@ class FFmpegHandler implements FormatHandler {
         return this.doConvert(inputFiles, inputFormat, outputFormat, [...oldArgs, "-s", newSize]);
       }
 
-      throw stdout;
+      throw stdout || `FFmpeg exited with code ${exitCode}.`;
     }
 
     let bytes: Uint8Array;
@@ -276,10 +343,9 @@ class FFmpegHandler implements FormatHandler {
     }
 
     await this.#ffmpeg.deleteFile("output");
-    await this.#ffmpeg.deleteFile("list.txt");
+    await this.#ffmpeg.deleteFile("list.txt").catch(() => {});
 
-    const baseName = inputFiles[0].name.split(".")[0];
-    const name = baseName + "." + outputFormat.extension;
+    const name = replaceExtension(inputFiles[0].name, outputFormat.extension);
 
     return [{ bytes, name }];
 

@@ -1,4 +1,5 @@
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
+import { replaceExtension } from "./handlerUtils.ts";
 
 // base class for handling renames
 function renameHandler(name: string, formats: FileFormat[]): FormatHandler {
@@ -14,10 +15,11 @@ function renameHandler(name: string, formats: FileFormat[]): FormatHandler {
       inputFormat: FileFormat,
       outputFormat: FileFormat
     ): Promise<FileData[]> {
-      return inputFiles.map(file => {
-        file.name = file.name.split(".")[0] + "." + outputFormat.extension;
-        return file;
-      });
+      // Return new objects: the inputs may be cached by the conversion engine.
+      return inputFiles.map(file => ({
+        name: replaceExtension(file.name, outputFormat.extension),
+        bytes: file.bytes
+      }));
     }
   };
 }
@@ -94,15 +96,6 @@ export const renameZipHandler = renameHandler("renamezip", [
     from: true,
     to: false,
     internal: "xpi"
-  },
-  {
-    name: "LÖVE Game Package",
-    format: "love",
-    extension: "love",
-    mime: "application/zip",
-    from: true,
-    to: false,
-    internal: "love"
   },
   {
     name: "LÖVE Game Package",

@@ -1,4 +1,7 @@
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
+import { decodeWithBOMDetection } from "./textEncoding.ts";
+
+import { bytesToBase64, replaceExtension, stripExtension } from "./handlerUtils.ts";
 
 class htmlEmbedHandler implements FormatHandler {
 
@@ -92,13 +95,12 @@ class htmlEmbedHandler implements FormatHandler {
     this.ready = true;
   }
 
-  static bytesToBase64 (bytes: Uint8Array): string {
-    const chunks = [];
-    for (let i = 0; i < bytes.length; i += 32768) {
-      const byteChunk = bytes.subarray(i, i + 32768);
-      chunks.push(String.fromCharCode(...byteChunk));
-    }
-    return btoa(chunks.join(""));
+  static escapeHTML (text: string): string {
+    return text
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll("\"", "&quot;");
   }
 
   async doConvert (
@@ -110,39 +112,49 @@ class htmlEmbedHandler implements FormatHandler {
     if (outputFormat.internal !== "html") throw "Invalid output format.";
 
     const encoder = new TextEncoder();
-    let html = "";
+    let body = "";
 
     if (inputFormat.internal === "text") {
-      const decoder = new TextDecoder();
       for (const inputFile of inputFiles) {
-        const text = decoder.decode(inputFile.bytes)
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;");
-        html += `<p>${text}</p><br>`;
+        const text = htmlEmbedHandler.escapeHTML(decodeWithBOMDetection(inputFile.bytes));
+        body += `<pre style="white-space:pre-wrap;word-wrap:break-word">${text}</pre>\n`;
       }
     } else {
       for (const inputFile of inputFiles) {
 
-        const base64 = htmlEmbedHandler.bytesToBase64(inputFile.bytes);
+        const base64 = bytesToBase64(inputFile.bytes);
+        const src = `data:${inputFormat.mime};base64,${base64}`;
+        const alt = htmlEmbedHandler.escapeHTML(inputFile.name);
 
         if (inputFormat.mime.startsWith("image/")) {
-          html += `<image src="data:${inputFormat.mime};base64,${base64}"><br>`;
+          body += `<img src="${src}" alt="${alt}"><br>\n`;
         } else if (inputFormat.mime.startsWith("audio/")) {
-          html += `<audio controls>
-            <source src="data:${inputFormat.mime};base64,${base64}" type="${inputFormat.mime}"></source>
-          </audio><br>`;
+          body += `<audio controls src="${src}"></audio><br>\n`;
         } else {
-          html += `<video controls>
-            <source src="data:${inputFormat.mime};base64,${base64}" type="${inputFormat.mime}"></source>
-          </video><br>`;
+          body += `<video controls src="${src}"></video><br>\n`;
         }
 
       }
     }
 
+    // Declare UTF-8 explicitly; without it browsers opening the saved file
+    // fall back to a legacy encoding and mangle non-ASCII text.
+    const title = htmlEmbedHandler.escapeHTML(stripExtension(inputFiles[0].name));
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>img,video{max-width:100%;height:auto}</style>
+</head>
+<body>
+${body}</body>
+</html>
+`;
+
     const bytes = encoder.encode(html);
-    const name = inputFiles[0].name.split(".").slice(0, -1).join(".") + "." + outputFormat.extension;
+    const name = replaceExtension(inputFiles[0].name, outputFormat.extension);
     return [{ bytes, name }];
 
   }

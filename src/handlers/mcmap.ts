@@ -1,11 +1,12 @@
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
 
-import pako from "pako";
+import { replaceExtension } from "./handlerUtils.ts";
 import * as NBT from "nbtify";
 
 const DEFAULT_WIDTH = 128
 const DEFAULT_HEIGHT = 128
-const ERROR_COLOR = [255, 0, 255, 255]
+// RGB output is 3 bytes per pixel, so the fallback colour must be too.
+const ERROR_COLOR = [255, 0, 255]
 
 const base_colours = [
     [0, 0, 0, 0],
@@ -111,9 +112,9 @@ class mcMapHandler implements FormatHandler {
 
         if (inputFormat.internal == "mcmap" && outputFormat.internal == "rgb") {
             for (const file of inputFiles) {
-                try {
-                    const result = pako.ungzip(file.bytes);
-                    const nbt = await NBT.read(result);
+                {
+                    // Map files are gzipped NBT; NBTify detects compression itself.
+                    const nbt = await NBT.read(file.bytes);
                     if (NBT.isTag<NBT.CompoundTag>(nbt.data)) {
                         const data: NBT.CompoundTag = nbt.data;
                         const mapdata = data["data"];
@@ -123,19 +124,20 @@ class mcMapHandler implements FormatHandler {
                             const colors = NBT.isTag<NBT.ByteArrayTag>(mapdata["colors"]) ? new Uint8Array(mapdata["colors"]) : new Uint8Array([]);
                             const bytes = map2rgb(colors, width, height);
                             outputFiles.push({
-                                name: file.name,
+                                name: replaceExtension(file.name, outputFormat.extension),
                                 bytes: new Uint8Array(bytes)
                             })
+                            continue;
                         }
                     }
-                } catch (e) {
-                    console.error(e);
+                    throw `${file.name} is not a Minecraft map file (missing data compound).`;
                 }
             }
         }
         if (inputFormat.internal == "rgb" && outputFormat.internal == "mcmap") {
             throw new Error("Not Implemented")
         }
+        if (outputFiles.length === 0) throw "mcMap: unsupported conversion.";
         return outputFiles;
     }
 }

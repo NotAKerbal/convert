@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { decodeWithBOMDetection } from "../handlers/textEncoding";
 
 import {
   cropOutputImage,
@@ -1052,7 +1053,8 @@ function TextPreview({ url }: { url: string }) {
   useEffect(() => {
     let cancelled = false;
     fetch(url)
-      .then((res) => res.text())
+      .then((res) => res.arrayBuffer())
+      .then((buffer) => decodeWithBOMDetection(new Uint8Array(buffer)))
       .then((t) => { if (!cancelled) setText(t); })
       .catch(() => { if (!cancelled) setText("[Could not load text preview]"); });
     return () => { cancelled = true; };

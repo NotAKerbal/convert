@@ -3,8 +3,9 @@ import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
 /**
  * Extracts the embedded text of a PDF document into a plain-text file.
  *
- * Uses pdf.js (pdfjs-dist), which is already a transitive dependency through
- * pdftoimg-js. The worker is copied into `public/wasm` by `scripts/copy-wasm.mjs`.
+ * Uses pdf.js (pdfjs-dist, a direct dependency shared with the pdftoimg
+ * handler). The worker is copied into `public/wasm` by `scripts/copy-wasm.mjs`
+ * and served locally, so PDFs never leave the browser.
  */
 class pdftotextHandler implements FormatHandler {
 

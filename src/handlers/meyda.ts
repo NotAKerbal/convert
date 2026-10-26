@@ -2,6 +2,7 @@ import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
 
 import Meyda from "meyda";
 import { WaveFile } from "wavefile";
+import { canvasToBytes, loadImage, replaceExtension } from "./handlerUtils.ts";
 
 class meydaHandler implements FormatHandler {
 
@@ -42,6 +43,8 @@ class meydaHandler implements FormatHandler {
   #ctx?: CanvasRenderingContext2D;
 
   async init () {
+    // init() may run again (warm-up and conversion); don't duplicate formats.
+    if (this.ready) return;
 
     const dummy = document.createElement("audio");
     this.supportedFormats.push({
@@ -112,6 +115,12 @@ class meydaHandler implements FormatHandler {
 
     const inputIsImage = (inputFormat.internal === "image");
     const outputIsImage = (outputFormat.internal === "image");
+    // This handler only converts between sound and spectrogram images. Without
+    // this check, audio -> audio (e.g. MP3 -> WAV) would emit a PNG spectrogram
+    // named .wav, and image -> image would emit WAV bytes named .jpg.
+    if (inputIsImage === outputIsImage) {
+      throw "meyda only converts between audio and spectrogram images.";
+    }
 
     const bufferSize = 2048;
     const hopSize = bufferSize / 2;
@@ -121,17 +130,7 @@ class meydaHandler implements FormatHandler {
     if (inputIsImage) {
       for (const inputFile of inputFiles) {
 
-        this.#ctx.clearRect(0, 0, this.#canvas.width, this.#canvas.width);
-
-        const blob = new Blob([inputFile.bytes as BlobPart], { type: inputFormat.mime });
-        const url = URL.createObjectURL(blob);
-
-        const image = new Image();
-        await new Promise((resolve, reject) => {
-          image.addEventListener("load", resolve);
-          image.addEventListener("error", reject);
-          image.src = url;
-        });
+        const image = await loadImage(inputFile.bytes, inputFormat.mime);
 
         const imageWidth = image.naturalWidth;
         const imageHeight = image.naturalHeight;
@@ -189,19 +188,22 @@ class meydaHandler implements FormatHandler {
 
         // Normalize output
         let max = 0;
-        for (let i = 0; i < imageWidth * bufferSize; i ++) {
+        for (let i = 0; i < audioData.length; i ++) {
           const magnitude = Math.abs(audioData[i]);
           if (magnitude > max) max = magnitude;
         }
-        for (let i = 0; i < audioData.length; i ++) {
-          audioData[i] /= max;
+        // A black image is silence; avoid dividing by zero (NaN samples).
+        if (max > 0) {
+          for (let i = 0; i < audioData.length; i ++) {
+            audioData[i] /= max;
+          }
         }
 
         const wav = new WaveFile();
         wav.fromScratch(1, sampleRate, "32f", audioData);
 
         const bytes = wav.toBuffer();
-        const name = inputFile.name.split(".")[0] + "." + outputFormat.extension;
+        const name = replaceExtension(inputFile.name, outputFormat.extension);
         outputFiles.push({ bytes, name });
 
       }
@@ -254,13 +256,8 @@ class meydaHandler implements FormatHandler {
 
         }
 
-        const bytes: Uint8Array = await new Promise((resolve, reject) => {
-          this.#canvas!.toBlob((blob) => {
-            if (!blob) return reject("Canvas output failed.");
-            blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
-          }, outputFormat.mime);
-        });
-        const name = inputFile.name.split(".")[0] + "." + outputFormat.extension;
+        const bytes = await canvasToBytes(this.#canvas, outputFormat.mime);
+        const name = replaceExtension(inputFile.name, outputFormat.extension);
         outputFiles.push({ bytes, name });
 
       }

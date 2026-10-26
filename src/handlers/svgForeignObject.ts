@@ -31,6 +31,8 @@ class svgForeignObjectHandler implements FormatHandler {
     this.ready = true;
   }
 
+  static mediaTimeout = 5000;
+
   static async normalizeHTML (html: string) {
     // To get the size of the input document, we need the
     // browser to actually render it.
@@ -55,11 +57,21 @@ class svgForeignObjectHandler implements FormatHandler {
 
     // Wait for all images to finish loading. This is required for layout
     // changes, not because we actually care about the image contents.
-    const images = container.querySelectorAll("img, video");
-    const promises = Array.from(images).map(image => new Promise(resolve => {
-      image.addEventListener("load", resolve);
-      image.addEventListener("loadeddata", resolve);
-      image.addEventListener("error", resolve);
+    // Media that never fires an event (no src, lazy-loaded, preload="none",
+    // or a failing <source> child whose error doesn't bubble) must not hang
+    // the conversion, so each wait is capped.
+    const media = Array.from(container.querySelectorAll("img, video")) as (HTMLImageElement | HTMLVideoElement)[];
+    const promises = media.map(element => new Promise(resolve => {
+      if (element instanceof HTMLImageElement) {
+        element.loading = "eager";
+        if (element.complete) return resolve(null);
+      } else if (element.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        return resolve(null);
+      }
+      element.addEventListener("load", resolve);
+      element.addEventListener("loadeddata", resolve);
+      element.addEventListener("error", resolve, true);
+      setTimeout(resolve, svgForeignObjectHandler.mediaTimeout);
     }));
     await Promise.all(promises);
 
@@ -72,7 +84,8 @@ class svgForeignObjectHandler implements FormatHandler {
     });
 
     // Finally, get the bounding box of the input and serialize it to XML.
-    const bbox = container.getBoundingClientRect();
+    const rect = container.getBoundingClientRect();
+    const bbox = { width: Math.ceil(rect.width), height: Math.ceil(rect.height) };
     const serializer = new XMLSerializer();
     const xml = serializer.serializeToString(container);
 

@@ -76,6 +76,34 @@ The first Docker build is expected to be slow because Chromium and related syste
 
 ## Contributing
 
+### Checking conversions
+
+Use Node.js 24 or newer and install dependencies with `npm install`. The
+postinstall script copies the browser engines into `public/wasm`.
+
+```bash
+npm test
+npm run typecheck
+npm run test:conversions
+```
+
+`test:conversions` starts an ephemeral local server and runs real Chromium/WASM
+conversions, including every advertised ImageMagick and Pandoc writer, document
+round trips, PDF pages, Unicode text, audio, subtitles, SQLite, GLB, VTF, NBT,
+Minecraft maps, executable archives, and FL Studio metadata. It validates output
+contents where possible. A pass on the included fixtures does not guarantee
+every codec, file variant, or combination of formats. The JSON report is written
+to `/tmp/convert-conversion-results.json`; set `CONVERSION_REPORT` to change its
+location or `CONVERSION_FILTER` to run a subset of checks. Set `CHROME_BIN` if
+using a system Chromium instead of Puppeteer's installed browser.
+
+To test the upload, picker, conversion, preview, and download flow in the real UI,
+start the app with `npm run dev` and run:
+
+```bash
+npm run test:ui -- http://localhost:3000/
+```
+
 The best way to contribute is by adding support for new file formats (duh). Here's how that works:
 
 ### Creating a handler

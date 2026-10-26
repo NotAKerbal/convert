@@ -1,5 +1,6 @@
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
 import JSZip from "jszip";
+import { replaceExtension } from "./handlerUtils.ts";
 
 class jszipHandler implements FormatHandler {
 
@@ -34,13 +35,21 @@ class jszipHandler implements FormatHandler {
     const outputFiles: FileData[] = [];
     const zip = new JSZip();
 
+    // Same-named inputs would overwrite each other inside the archive.
+    const used = new Set<string>();
     for (const file of inputFiles) {
-      zip.file(file.name, file.bytes);
+      let entryName = file.name || "file";
+      for (let n = 1; used.has(entryName); n++) {
+        entryName = file.name.replace(/(\.[^.]*)?$/, (ext) => ` (${n})${ext}`);
+      }
+      used.add(entryName);
+      zip.file(entryName, file.bytes);
     }
 
-    const output = await zip.generateAsync({ type: "uint8array" });
+    const output = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
 
-    outputFiles.push({ bytes: output, name: "output.zip" });
+    const name = inputFiles.length === 1 ? replaceExtension(inputFiles[0].name, "zip") : "output.zip";
+    outputFiles.push({ bytes: output, name });
     return outputFiles;
   }
 }

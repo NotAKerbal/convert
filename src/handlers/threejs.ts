@@ -4,6 +4,8 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { GLTF } from "three/addons/loaders/GLTFLoader.js";
 
+import { canvasToBytes, mimeLacksAlpha, replaceExtension } from "./handlerUtils.ts";
+
 class threejsHandler implements FormatHandler {
 
   public name: string = "threejs";
@@ -47,13 +49,36 @@ class threejsHandler implements FormatHandler {
   ];
   public ready: boolean = false;
 
-  private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(90, 16 / 9, 0.1, 4096);
-  private renderer = new THREE.WebGLRenderer();
+  static width = 960;
+  static height = 540;
+
+  private renderer?: THREE.WebGLRenderer;
 
   async init () {
-    this.renderer.setSize(960, 540);
+    if (!this.renderer) {
+      this.renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        preserveDrawingBuffer: true
+      });
+      this.renderer.setSize(threejsHandler.width, threejsHandler.height);
+    }
     this.ready = true;
+  }
+
+  /** Releases GPU resources held by a loaded model. */
+  static dispose (root: THREE.Object3D) {
+    root.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      for (const material of materials) {
+        for (const value of Object.values(material)) {
+          if (value instanceof THREE.Texture) value.dispose();
+        }
+        material.dispose();
+      }
+    });
   }
 
   async doConvert (
@@ -61,33 +86,62 @@ class threejsHandler implements FormatHandler {
     _inputFormat: FileFormat,
     outputFormat: FileFormat
   ): Promise<FileData[]> {
+    if (!this.renderer) await this.init();
+    const renderer = this.renderer!;
     const outputFiles: FileData[] = [];
 
     for (const inputFile of inputFiles) {
 
-      const blob = new Blob([inputFile.bytes as BlobPart]);
-      const url = URL.createObjectURL(blob);
-
+      // Parse straight from memory: no object URL to leak, nothing fetched.
+      const buffer = inputFile.bytes.buffer.slice(
+        inputFile.bytes.byteOffset,
+        inputFile.bytes.byteOffset + inputFile.bytes.byteLength
+      ) as ArrayBuffer;
       const gltf: GLTF = await new Promise((resolve, reject) => {
-        const loader = new GLTFLoader();
-        loader.load(url, resolve, undefined, reject);
+        new GLTFLoader().parse(buffer, "", resolve, reject);
       });
 
+      const scene = new THREE.Scene();
+      // glTF uses physically based materials, which render black without light.
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+      const sun = new THREE.DirectionalLight(0xffffff, 2);
+      sun.position.set(1, 2, 3);
+      scene.add(sun);
+      scene.add(gltf.scene);
+
+      // Frame the model's bounding sphere from the front, slightly above.
+      const camera = new THREE.PerspectiveCamera(
+        45, threejsHandler.width / threejsHandler.height, 0.01, 1e7
+      );
       const bbox = new THREE.Box3().setFromObject(gltf.scene);
-      this.camera.position.z = bbox.max.z * 2;
+      const sphere = bbox.getBoundingSphere(new THREE.Sphere());
+      if (bbox.isEmpty() || !Number.isFinite(sphere.radius) || sphere.radius <= 0) {
+        threejsHandler.dispose(gltf.scene);
+        throw `${inputFile.name} contains no visible geometry.`;
+      }
+      const vFov = THREE.MathUtils.degToRad(camera.fov);
+      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+      const distance = sphere.radius / Math.sin(Math.min(vFov, hFov) / 2);
+      const direction = new THREE.Vector3(0, 0.35, 1).normalize();
+      camera.position.copy(sphere.center).addScaledVector(direction, distance * 1.1);
+      camera.near = Math.max(distance / 1000, 1e-4);
+      camera.far = distance * 10;
+      camera.updateProjectionMatrix();
+      camera.lookAt(sphere.center);
+      sun.position.copy(camera.position).add(new THREE.Vector3(distance, distance, 0));
 
-      this.scene.add(gltf.scene);
-      this.renderer.render(this.scene, this.camera);
-      this.scene.remove(gltf.scene);
+      // JPEG has no alpha: render on white. PNG/WebP keep a transparent background.
+      if (mimeLacksAlpha(outputFormat.mime)) renderer.setClearColor(0xffffff, 1);
+      else renderer.setClearColor(0x000000, 0);
+      renderer.render(scene, camera);
 
-      const bytes: Uint8Array = await new Promise((resolve, reject) => {
-        this.renderer.domElement.toBlob((blob) => {
-          if (!blob) return reject("Canvas output failed");
-          blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
-        }, outputFormat.mime);
-      });
-      const name = inputFile.name.split(".")[0] + "." + outputFormat.extension;
-      outputFiles.push({ bytes, name });
+      try {
+        const bytes = await canvasToBytes(renderer.domElement, outputFormat.mime);
+        outputFiles.push({ bytes, name: replaceExtension(inputFile.name, outputFormat.extension) });
+      } finally {
+        threejsHandler.dispose(gltf.scene);
+        renderer.renderLists.dispose();
+      }
 
     }
 

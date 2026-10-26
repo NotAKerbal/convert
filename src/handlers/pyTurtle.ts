@@ -1,4 +1,5 @@
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
+import { replaceExtension } from "./handlerUtils.ts";
 
 // hardcoded limits to prevent big SVG crash
 const MAX_ELEMENTS = 750;
@@ -92,12 +93,19 @@ class pyTurtleHandler implements FormatHandler {
       const { name, bytes } = inputFile;
       const svg_text = decoder.decode(bytes);
           const displayArea = createContainer(svg_text)
-    const svgEl = displayArea.querySelector('svg')!;
-    const python_code = pyTurtleHandler.convert_program(svgEl)
+    let python_code: string;
+    try {
+      const svgEl = displayArea.querySelector('svg');
+      if (!svgEl) throw `${name} does not contain an <svg> element.`;
+      python_code = pyTurtleHandler.convert_program(svgEl);
+    } finally {
+      // Remove the hidden render host so conversions don't accumulate in the DOM.
+      (displayArea.getRootNode() as ShadowRoot).host.remove();
+    }
 
 
       const outputBytes = encoder.encode(python_code);
-      const newName = name.split(".")[0] + ".py";
+      const newName = replaceExtension(name, "py");
       outputFiles.push({ name: newName, bytes: outputBytes });
     }
 

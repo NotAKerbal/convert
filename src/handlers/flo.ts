@@ -1,5 +1,6 @@
 import type { FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
 import normalizeMimeType from "../normalizeMimeType.ts";
+import { replaceExtension } from "./handlerUtils.ts";
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 
@@ -92,52 +93,85 @@ async function decodeWithBrowser(
   }
 }
 
-async function decodeWithFFmpeg(
-  bytes: Uint8Array,
-): Promise<{ samples: Float32Array; sampleRate: number; channels: number }> {
-  const ffmpeg = new FFmpeg();
-  await ffmpeg.load({ coreURL: "/wasm/ffmpeg-core.js" });
-  await ffmpeg.writeFile("infile", bytes);
-  // produce f32le raw samples with WAV header so we can parse sampleRate/channels
-  try {
-    await ffmpeg.exec(["-i", "infile", "-f", "wav", "out.wav"]);
-  } catch (e) {
-    // If probing failed, try interpreting input as raw float32 PCM (f32le) with defaults
-    try {
-      await ffmpeg.exec(["-f", "f32le", "-ar", "44100", "-ac", "1", "-i", "infile", "-f", "wav", "out.wav"]);
-    } catch (e2) {
-      await ffmpeg.deleteFile("infile");
-      throw e2;
+export interface DecodedAudio {
+  samples: Float32Array;
+  sampleRate: number;
+  channels: number;
+}
+
+/**
+ * Parses a RIFF/WAVE file into interleaved Float32 samples, walking the chunk
+ * list (encoders often insert LIST/fact chunks, so the data isn't always at
+ * byte 44). Supports integer PCM (8/16/24/32-bit) and 32/64-bit float.
+ */
+export function parseWav(bytes: Uint8Array): DecodedAudio {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const tag = (offset: number) => String.fromCharCode(...bytes.subarray(offset, offset + 4));
+  if (bytes.length < 12 || tag(0) !== "RIFF" || tag(8) !== "WAVE") throw new Error("Not a WAV file.");
+
+  let format = 0, channels = 0, sampleRate = 0, bitsPerSample = 0;
+  let dataOffset = -1, dataLength = 0;
+  for (let p = 12; p + 8 <= bytes.length; ) {
+    const id = tag(p);
+    const size = view.getUint32(p + 4, true);
+    const body = p + 8;
+    if (id === "fmt ") {
+      format = view.getUint16(body, true);
+      channels = view.getUint16(body + 2, true);
+      sampleRate = view.getUint32(body + 4, true);
+      bitsPerSample = view.getUint16(body + 14, true);
+      // WAVE_FORMAT_EXTENSIBLE: the real format is the subformat GUID's first 2 bytes.
+      if (format === 0xfffe && size >= 26) format = view.getUint16(body + 24, true);
+    } else if (id === "data") {
+      dataOffset = body;
+      // Streaming writers may leave the size as 0 / 0xFFFFFFFF.
+      dataLength = Math.min(size || Infinity, bytes.length - body);
+      break;
     }
+    p = body + size + (size & 1);
   }
-  const out = await ffmpeg.readFile("out.wav");
-  await ffmpeg.deleteFile("infile");
-  await ffmpeg.deleteFile("out.wav");
-  // parse WAV header (simple)
-  const data = out as Uint8Array;
-  const view = new DataView(data.buffer);
-  const sampleRate = view.getUint32(24, true);
-  const channels = view.getUint16(22, true);
-  const bitsPerSample = view.getUint16(34, true);
-  const dataOffset = 44;
-  let samples: Float32Array;
-  if (bitsPerSample === 32) {
-    samples = new Float32Array(
-      data.buffer,
-      dataOffset,
-      (data.length - dataOffset) / 4,
-    );
-  } else if (bitsPerSample === 16) {
-    const count = (data.length - dataOffset) / 2;
-    samples = new Float32Array(count);
-    const dv = new DataView(data.buffer, dataOffset);
-    for (let i = 0; i < count; i++)
-      samples[i] = dv.getInt16(i * 2, true) / 0x7fff;
-  } else {
-    throw new Error("Unsupported WAV bit depth: " + bitsPerSample);
+  if (!channels || !sampleRate || dataOffset < 0) throw new Error("WAV file is missing fmt or data chunk.");
+
+  const bytesPerSample = bitsPerSample / 8;
+  const count = Math.floor(dataLength / bytesPerSample);
+  const samples = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const o = dataOffset + i * bytesPerSample;
+    if (format === 3 && bitsPerSample === 32) samples[i] = view.getFloat32(o, true);
+    else if (format === 3 && bitsPerSample === 64) samples[i] = view.getFloat64(o, true);
+    else if (format === 1 && bitsPerSample === 8) samples[i] = (view.getUint8(o) - 128) / 128;
+    else if (format === 1 && bitsPerSample === 16) samples[i] = view.getInt16(o, true) / 0x8000;
+    else if (format === 1 && bitsPerSample === 24) {
+      const v = view.getUint8(o) | (view.getUint8(o + 1) << 8) | (view.getInt8(o + 2) << 16);
+      samples[i] = v / 0x800000;
+    } else if (format === 1 && bitsPerSample === 32) samples[i] = view.getInt32(o, true) / 0x80000000;
+    else throw new Error(`Unsupported WAV encoding (format ${format}, ${bitsPerSample}-bit).`);
   }
   return { samples, sampleRate, channels };
 }
+
+/** Decodes other audio through FFmpeg.wasm (same static worker setup as the FFmpeg handler). */
+async function decodeWithFFmpeg(bytes: Uint8Array): Promise<DecodedAudio> {
+  const ffmpeg = new FFmpeg();
+  try {
+    await ffmpeg.load({
+      coreURL: "/wasm/ffmpeg-core.js",
+      classWorkerURL: `${location.origin}/wasm/ffmpeg/worker.js`
+    });
+    await ffmpeg.writeFile("infile", bytes);
+    const code = await ffmpeg.exec(["-hide_banner", "-i", "infile", "-vn", "-c:a", "pcm_f32le", "-f", "wav", "out.wav"]);
+    if (code !== 0) throw new Error(`FFmpeg could not decode the audio (exit code ${code}).`);
+    const out = await ffmpeg.readFile("out.wav");
+    if (!(out instanceof Uint8Array)) throw new Error("FFmpeg produced no audio.");
+    return parseWav(out);
+  } finally {
+    ffmpeg.terminate();
+  }
+}
+
+/** Raw PCM carries no header, so these are the assumed stream parameters. */
+const RAW_PCM_SAMPLE_RATE = 44100;
+const RAW_PCM_CHANNELS = 1;
 
 class floHandler implements FormatHandler {
   public name: string = "floHandler";
@@ -238,98 +272,72 @@ class floHandler implements FormatHandler {
     });
   }
 
+  async #reflo() {
+    const mod = await import("@flo-audio/reflo");
+    await mod.default({ module_or_path: "/wasm/reflo_bg.wasm" });
+    return mod;
+  }
+
+  async #decodeFlo(bytes: Uint8Array): Promise<DecodedAudio> {
+    if (this.#worker) return await this._workerDecode(bytes);
+    const mod = await this.#reflo();
+    const info = mod.get_flo_file_info(bytes);
+    return { samples: mod.decode(bytes), sampleRate: info.sample_rate, channels: info.channels };
+  }
+
+  async #encodeFlo(audio: DecodedAudio): Promise<Uint8Array> {
+    if (this.#worker) return await this._workerEncode(audio.samples, audio.sampleRate, audio.channels, 32);
+    const mod = await this.#reflo();
+    return mod.encode(audio.samples, audio.sampleRate, audio.channels, 32, null);
+  }
+
+  async #decodeInput(bytes: Uint8Array, inputFormat: FileFormat): Promise<DecodedAudio> {
+    if (inputFormat.internal === "f32le") {
+      const aligned = new Uint8Array(bytes.byteLength - (bytes.byteLength % 4));
+      aligned.set(bytes.subarray(0, aligned.length));
+      return { samples: new Float32Array(aligned.buffer), sampleRate: RAW_PCM_SAMPLE_RATE, channels: RAW_PCM_CHANNELS };
+    }
+    // Parse WAV directly: Web Audio resamples to the device rate.
+    try {
+      return parseWav(bytes);
+    } catch {}
+    try {
+      return await decodeWithBrowser(new Uint8Array(bytes));
+    } catch {
+      return await decodeWithFFmpeg(new Uint8Array(bytes));
+    }
+  }
+
   async doConvert(
     inputFiles: FileData[],
     inputFormat: FileFormat,
     outputFormat: FileFormat,
-    args?: string[],
   ): Promise<FileData[]> {
     if (!inputFiles || inputFiles.length === 0) throw "No input files";
-    const file = inputFiles[0];
-    const baseName = (() => {
-      const idx = file.name.lastIndexOf('.');
-      return idx > 0 ? file.name.slice(0, idx) : file.name;
-    })();
+    if (inputFormat.internal === outputFormat.internal) throw "floHandler: input and output formats are the same.";
 
-    // FLO -> outputs
-    if (inputFormat.internal === "flo") {
+    const outputFiles: FileData[] = [];
+    for (const file of inputFiles) {
       const bytes = new Uint8Array(file.bytes);
-      let samples: Float32Array;
-      let sampleRate: number;
-      let channels: number;
-      if (this.#worker) {
-        const res = await this._workerDecode(bytes);
-        samples = res.samples;
-        sampleRate = res.sampleRate;
-        channels = res.channels;
-      } else {
-        const mod = await import('@flo-audio/reflo');
-        samples = mod.decode(bytes);
-        const info = mod.get_flo_file_info(bytes);
-        sampleRate = info.sample_rate;
-        channels = info.channels;
-      }
+      const audio = inputFormat.internal === "flo"
+        ? await this.#decodeFlo(bytes)
+        : await this.#decodeInput(bytes, inputFormat);
 
-      if (
-        outputFormat.internal === "wav" ||
-        outputFormat.mime === "audio/wav"
-      ) {
-        const pcm16 = floatTo16BitPCM(samples);
-        const wav = writeWavHeader(pcm16, sampleRate, channels, 16);
-        return [{ bytes: wav, name: baseName + ".wav" }];
-      }
-
-      if (
-        outputFormat.internal === "f32le" ||
-        outputFormat.mime === "video/f32le"
-      ) {
-        const out = new Uint8Array(samples.buffer.slice(0));
-        return [{ bytes: out, name: baseName + ".pcm" }];
-      }
-
-      // If target is flo, just return same bytes
+      let out: Uint8Array;
       if (outputFormat.internal === "flo") {
-        return [{ bytes: new Uint8Array(file.bytes), name: file.name }];
-      }
-
-      throw `floHandler: unsupported target ${outputFormat.format}`;
-    }
-
-    // Inputs -> FLO
-    if (outputFormat.internal === "flo") {
-      // Try browser decode first
-      let decoded: {
-        samples: Float32Array;
-        sampleRate: number;
-        channels: number;
-      } | null = null;
-      try {
-        decoded = await decodeWithBrowser(new Uint8Array(file.bytes));
-      } catch (e) {
-        // fallback to ffmpeg
-        decoded = await decodeWithFFmpeg(new Uint8Array(file.bytes));
-      }
-      // (samples, sample_rate, channels, bit_depth, metadata)
-      let floBytes: Uint8Array;
-      if (this.#worker) {
-        floBytes = await this._workerEncode(decoded.samples, decoded.sampleRate, decoded.channels, 32);
+        out = await this.#encodeFlo(audio);
+      } else if (outputFormat.internal === "wav") {
+        out = writeWavHeader(floatTo16BitPCM(audio.samples), audio.sampleRate, audio.channels, 16);
+      } else if (outputFormat.internal === "f32le") {
+        out = new Uint8Array(audio.samples.buffer.slice(
+          audio.samples.byteOffset, audio.samples.byteOffset + audio.samples.byteLength
+        ));
       } else {
-        const mod = await import('@flo-audio/reflo');
-        floBytes = mod.encode(decoded.samples, decoded.sampleRate, decoded.channels, 32, null);
+        throw `floHandler: unsupported target ${outputFormat.format}`;
       }
-      return [{ bytes: new Uint8Array(floBytes), name: baseName + ".flo" }];
+      outputFiles.push({ bytes: new Uint8Array(out), name: replaceExtension(file.name, outputFormat.extension) });
     }
-    if (
-      inputFormat.mime === "audio/wav" ||
-      inputFormat.internal === "wav" ||
-      inputFormat.mime === "video/f32le" ||
-      inputFormat.internal === "f32le"
-    ) {
-      // pass-through, other handlers (FFmpeg) likely handle this better. For now, just return input file.
-      return [{ bytes: new Uint8Array(file.bytes), name: file.name }];
-    }
-
-    throw `floHandler: unsupported conversion ${inputFormat.format} -> ${outputFormat.format}`;
+    return outputFiles;
   }
 }
 
