@@ -748,15 +748,22 @@ html {
   grid-template-columns: 1fr 1fr;
   gap: 24px;
 }
-.color-field {
+.color-field,
+.size-field {
   border: 0;
   min-width: 0;
 }
-.color-field legend {
+.color-field legend,
+.size-field legend {
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 500;
   margin-bottom: 13px;
+}
+.size-field .segmented-control button {
+  min-width: 0;
+  padding-inline: 2px;
+  font-variant-numeric: tabular-nums;
 }
 .color-swatches {
   display: flex;
