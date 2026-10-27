@@ -38,6 +38,12 @@ export function ToolIcon({
           <path d="M3 5h12M9 5v15M5 20h8m2-8h6m-3 0v8m-3 0h6" />
         </>
       )}
+      {name === "document" && (
+        <>
+          <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
+          <path d="M14 3v6h6M8 13h8M8 17h6" />
+        </>
+      )}
       {name === "json" && (
         <>
           <path d="M8 3H6a2 2 0 0 0-2 2v4c0 2-2 3-2 3s2 1 2 3v4a2 2 0 0 0 2 2h2M16 3h2a2 2 0 0 1 2 2v4c0 2 2 3 2 3s-2 1-2 3v4a2 2 0 0 1-2 2h-2" />
