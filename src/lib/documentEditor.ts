@@ -44,6 +44,6 @@ export function exportDocumentHtml(title: string, html: string) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title.trim() || "Untitled document")}</title>
-<style>body{max-width:760px;margin:48px auto;padding:0 24px;color:#222;font:17px/1.7 system-ui,sans-serif;overflow-wrap:anywhere}p,ul,ol,blockquote{margin:0 0 1em}li{margin:.25em 0}blockquote{border-left:3px solid #bbb;padding-left:1em;color:#555}h1,h2,h3{line-height:1.25}@media print{body{margin:0;max-width:none}}</style>
+<style>body{max-width:760px;margin:48px auto;padding:0 24px;color:#222;font:17px/1.7 system-ui,sans-serif;overflow-wrap:anywhere;white-space:pre-wrap}p,ul,ol,blockquote{margin:0 0 1em}li{margin:.25em 0}blockquote{border-left:3px solid #bbb;padding-left:1em;color:#555}h1,h2,h3{line-height:1.25}@media print{body{margin:0;max-width:none}}</style>
 </head><body>${sanitizeDocumentHtml(html)}</body></html>`;
 }

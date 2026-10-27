@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ClipboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from "react";
 import {
   DOCUMENT_DRAFT_KEY,
   documentFilename,
@@ -25,6 +25,8 @@ export function DocumentEditor() {
   const fileInput = useRef<HTMLInputElement>(null);
   const selection = useRef<Range | null>(null);
   const latest = useRef<Draft>(emptyDraft);
+  const savedVersion = useRef<string | null>(null);
+  const pendingChanges = useRef(false);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [ready, setReady] = useState(false);
   const [text, setText] = useState("");
@@ -34,9 +36,31 @@ export function DocumentEditor() {
   const [block, setBlock] = useState("p");
   const stats = getTextStats(text);
 
+  const saveDraft = useCallback((report = true) => {
+    if (!pendingChanges.current) return true;
+    try {
+      // An unedited tab never writes. An edited tab may only replace the
+      // version it loaded or last saved, preserving changes from other tabs.
+      if (localStorage.getItem(DOCUMENT_DRAFT_KEY) !== savedVersion.current) {
+        if (report) setSaveStatus("Draft changed in another tab — download your edits before reloading");
+        return false;
+      }
+      const serialized = JSON.stringify(latest.current);
+      localStorage.setItem(DOCUMENT_DRAFT_KEY, serialized);
+      savedVersion.current = serialized;
+      pendingChanges.current = false;
+      if (report) setSaveStatus("Draft saved on this device");
+      return true;
+    } catch {
+      if (report) setSaveStatus("Autosave unavailable — download to keep your work");
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
     try {
       const saved = localStorage.getItem(DOCUMENT_DRAFT_KEY);
+      savedVersion.current = saved;
       if (saved) {
         const value = JSON.parse(saved);
         if (value?.version !== 1 || typeof value.title !== "string" || typeof value.html !== "string") {
@@ -50,20 +74,15 @@ export function DocumentEditor() {
           setText(editor.current.innerText);
         }
       }
+      setSaveStatus(saved ? "Draft saved on this device" : "No draft saved yet");
     } catch {
       setNotice("Couldn’t restore a local draft. You can still write and download your document.");
+      setSaveStatus("Autosave unavailable — download to keep your work");
     }
     setReady(true);
 
     // Flush pending edits on navigation, tab close, or the page going inactive.
-    const flush = () => {
-      try {
-        localStorage.setItem(DOCUMENT_DRAFT_KEY, JSON.stringify(latest.current));
-        return true;
-      } catch {
-        return false;
-      }
-    };
+    const flush = () => saveDraft();
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (!flush()) {
         event.preventDefault();
@@ -73,29 +92,29 @@ export function DocumentEditor() {
     const onHidden = () => {
       if (document.visibilityState === "hidden") flush();
     };
+    const onStorage = (event: StorageEvent) => {
+      if ((event.key === DOCUMENT_DRAFT_KEY || event.key === null) && event.newValue !== savedVersion.current) {
+        setSaveStatus("Draft changed in another tab — download your edits before reloading");
+      }
+    };
     window.addEventListener("pagehide", flush);
     window.addEventListener("beforeunload", beforeUnload);
     document.addEventListener("visibilitychange", onHidden);
+    window.addEventListener("storage", onStorage);
     return () => {
-      flush();
+      saveDraft(false);
       window.removeEventListener("pagehide", flush);
       window.removeEventListener("beforeunload", beforeUnload);
       document.removeEventListener("visibilitychange", onHidden);
+      window.removeEventListener("storage", onStorage);
     };
-  }, []);
+  }, [saveDraft]);
 
   useEffect(() => {
     if (!ready) return;
-    const timeout = window.setTimeout(() => {
-      try {
-        localStorage.setItem(DOCUMENT_DRAFT_KEY, JSON.stringify(draft));
-        setSaveStatus("Draft saved on this device");
-      } catch {
-        setSaveStatus("Autosave unavailable — download to keep your work");
-      }
-    }, 400);
+    const timeout = window.setTimeout(() => saveDraft(), 400);
     return () => window.clearTimeout(timeout);
-  }, [draft, ready]);
+  }, [draft, ready, saveDraft]);
 
   useEffect(() => {
     const onSelection = () => {
@@ -111,7 +130,9 @@ export function DocumentEditor() {
   }, []);
 
   function update(next: Draft) {
+    if (next.title === latest.current.title && next.html === latest.current.html) return;
     latest.current = next;
+    pendingChanges.current = true;
     setDraft(next);
     setSaveStatus("Saving…");
   }

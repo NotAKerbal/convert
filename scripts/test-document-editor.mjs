@@ -120,12 +120,18 @@ try {
   assert.equal(requests.some((url) => url.includes("example.invalid")), false);
 
   const plainFile = path.join(artifacts, "Plain.txt");
-  await writeFile(plainFile, "Hello <script>literal text</script>\nSecond line");
+  await writeFile(plainFile, "Hello <script>literal text</script>\n  Two  spaces\tand a tab");
   page.once("dialog", (dialog) => dialog.accept());
   await (await page.$('input[type="file"]')).uploadFile(plainFile);
   await wait(() => document.querySelector(".document-name input").value === "Plain");
   assert.match(await bodyText(), /Hello <script>literal text<\/script>/);
   assert.equal(await page.$(".document-content script"), null);
+  await clickText("Download .html");
+  const exported = await browser.newPage();
+  await exported.setContent(await download("Plain.html"));
+  assert.equal(await exported.$eval("body", (element) => getComputedStyle(element).whiteSpace), "pre-wrap");
+  assert.equal(await exported.$eval("p:nth-child(2)", (element) => element.innerText), "  Two  spaces\tand a tab");
+  await exported.close();
   // Paste strips rich markup while preserving literal text and undo history.
   await selectBody();
   await page.evaluate(() => {
@@ -177,14 +183,49 @@ try {
     Storage.prototype.setItem = () => { throw new DOMException("Storage unavailable", "QuotaExceededError"); };
   });
   await unavailable.goto(`${baseUrl}/tools/document`, { waitUntil: "networkidle0" });
-  await unavailable.waitForFunction(() => document.querySelector(".document-status").textContent.includes("Autosave unavailable"));
   await unavailable.focus(".document-content");
   await unavailable.keyboard.type("Still editable");
+  await unavailable.waitForFunction(() => document.querySelector(".document-status").textContent.includes("Autosave unavailable"));
   assert.match(await unavailable.$eval(".document-content", (element) => element.innerText), /Still editable/);
   await unavailable.close();
+
+  // An unedited stale tab must not replace a newer saved draft on navigation,
+  // and an edited stale tab must keep the newer version and warn of conflict.
+  await page.bringToFront();
+  await fill(".document-name input", "Shared initial draft");
+  await wait(() => document.querySelector(".document-status").textContent.includes("Draft saved"));
+  const stale = await browser.newPage();
+  const conflicting = await browser.newPage();
+  for (const tab of [stale, conflicting]) {
+    tab.on("pageerror", (error) => errors.push(error.message));
+    tab.on("dialog", (dialog) => dialog.dismiss());
+    await tab.goto(`${baseUrl}/tools/document`, { waitUntil: "networkidle0" });
+  }
+  await page.bringToFront();
+  await fill(".document-name input", "Newest saved draft");
+  await wait(() => document.querySelector(".document-status").textContent.includes("Draft saved"));
+  await stale.bringToFront();
+  await stale.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+  await stale.locator("a.back-to-tools").click();
+  await stale.close();
+  const savedTitle = () => page.evaluate(() => JSON.parse(localStorage.getItem("convert-to-it.document.v1")).title);
+  assert.equal(await savedTitle(), "Newest saved draft");
+  await conflicting.bringToFront();
+  await conflicting.focus(".document-name input");
+  await conflicting.keyboard.down("Control");
+  await conflicting.keyboard.press("KeyA");
+  await conflicting.keyboard.up("Control");
+  await conflicting.keyboard.sendCharacter("Conflicting older copy");
+  await conflicting.waitForFunction(() => document.querySelector(".document-status").textContent.includes("changed in another tab"));
+  assert.equal(await savedTitle(), "Newest saved draft");
+  await conflicting.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+  await conflicting.locator("a.back-to-tools").click();
+  await conflicting.close();
+  await page.reload({ waitUntil: "networkidle0" });
+  assert.equal(await page.$eval(".document-name input", (input) => input.value), "Newest saved draft");
   assert.deepEqual(errors, []);
   assert.equal(requests.some((url) => /\.wasm(?:\?|$)/.test(url)), false);
-  console.log(`PASS: formatting, undo/redo, lists, draft recovery and navigation, replacement confirmation, HTML/TXT downloads and imports, safe paste, print/PDF, storage failures, light/dark mobile layouts. Artifacts: ${artifacts}`);
+  console.log(`PASS: formatting, undo/redo, lists, draft recovery and navigation, cross-tab draft conflicts, replacement confirmation, HTML/TXT downloads and imports, whitespace-preserving exports, safe paste, print/PDF, storage failures, light/dark mobile layouts. Artifacts: ${artifacts}`);
 } finally {
   await browser.close();
 }
