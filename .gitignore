@@ -8,4 +8,4 @@ dist
 /cache.json
 .next
 tsconfig.tsbuildinfo
-public/wasm/
+public/wasm
