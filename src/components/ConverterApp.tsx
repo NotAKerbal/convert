@@ -177,7 +177,7 @@ function summarizeFormats(entries: SelectedFileEntry[]) {
 async function downloadOutputsAsZip(files: OutputFile[], name: string) {
   const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
-  for (const file of files) zip.file(file.name, file.bytes);
+  for (const file of uniquifyOutputNames(files)) zip.file(file.name, file.bytes);
   const blob = await zip.generateAsync({ type: "blob" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
