@@ -22,6 +22,7 @@ const colors = [
   { value: "#1e3a5f", name: "Navy" },
   { value: "#6b305b", name: "Plum" },
 ];
+const sizes = [256, 512, 1024];
 
 export function QrCodeTool() {
   const [mode, setMode] = useState<QrMode>("url");
@@ -230,17 +231,23 @@ export function QrCodeTool() {
               ))}
             </div>
           </fieldset>
-          <label className="field-label">
-            PNG size
-            <select
-              value={size}
-              onChange={(event) => setSize(Number(event.target.value))}
-            >
-              <option value={256}>256 × 256 px</option>
-              <option value={512}>512 × 512 px</option>
-              <option value={1024}>1024 × 1024 px</option>
-            </select>
-          </label>
+          <fieldset className="size-field">
+            <legend>PNG size (px)</legend>
+            <div className="segmented-control">
+              {sizes.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  aria-label={`${item} × ${item} pixels`}
+                  aria-pressed={size === item}
+                  className={size === item ? "selected" : ""}
+                  onClick={() => setSize(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </fieldset>
         </div>
         <label className="field-label">
           Error correction

@@ -11,6 +11,7 @@
     "test": "node --experimental-strip-types --test src/lib/*.test.ts",
     "test:browser": "node scripts/test-toolkit.mjs",
     "test:narration": "node scripts/test-narration.mjs",
+    "test:document": "node scripts/test-document-editor.mjs",
     "copy:wasm": "node scripts/copy-wasm.mjs",
     "build:cache": "node scripts/build-cache.mjs",
     "postinstall": "npm run copy:wasm"

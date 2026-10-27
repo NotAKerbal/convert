@@ -136,7 +136,7 @@ try {
   await themePage.emulateMediaFeatures([
     { name: "prefers-color-scheme", value: "light" },
   ]);
-  for (const slug of ["qr-code", "text", "json", "convert"]) {
+  for (const slug of ["qr-code", "text", "json", "document", "convert"]) {
     await themePage.goto(`${baseUrl}/tools/${slug}`, {
       waitUntil: "networkidle0",
     });
@@ -175,7 +175,7 @@ try {
     { name: "prefers-color-scheme", value: "dark" },
   ]);
   await page.goto(baseUrl, { waitUntil: "networkidle0" });
-  assert.equal(await page.$$eval(".tool-card", (cards) => cards.length), 4);
+  assert.equal(await page.$$eval(".tool-card", (cards) => cards.length), 5);
   await noOverflow();
   await page.screenshot({
     path: path.join(artifacts, "homepage-desktop.png"),

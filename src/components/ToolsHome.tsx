@@ -28,38 +28,39 @@ export function ToolsHome() {
         id="tools"
         aria-labelledby="tools-title"
       >
-        <div className="directory-heading">
-          <h1 id="tools-title">Tools</h1>
-          <span className="tool-count">{tools.length} tools</span>
-        </div>
-        <div className="directory-controls">
-          <div
-            className="category-filters"
-            role="group"
-            aria-label="Tool category"
-          >
-            {categories.map((item) => (
-              <button
-                key={item}
-                className={category === item ? "selected" : ""}
-                aria-pressed={category === item}
-                onClick={() => setCategory(item)}
-              >
-                {item}
-              </button>
-            ))}
+        <div className="directory-toolbar">
+          <div className="directory-heading">
+            <h1 id="tools-title">Tools</h1>
+            <span className="tool-count">{tools.length} tools</span>
           </div>
-          <label className="tool-search">
-            <ToolIcon name="search" />
-            <input
-              type="search"
-              aria-label="Search tools"
-              placeholder="Find a tool…"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            <kbd aria-hidden="true">⌕</kbd>
-          </label>
+          <div className="directory-controls">
+            <div
+              className="category-filters"
+              role="group"
+              aria-label="Tool category"
+            >
+              {categories.map((item) => (
+                <button
+                  key={item}
+                  className={category === item ? "selected" : ""}
+                  aria-pressed={category === item}
+                  onClick={() => setCategory(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+            <label className="tool-search">
+              <ToolIcon name="search" />
+              <input
+                type="search"
+                aria-label="Search tools"
+                placeholder="Find a tool…"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
+          </div>
         </div>
 
         <div className="tools-grid">
@@ -127,7 +128,7 @@ export function ToolsHome() {
           <div className="no-tools" role="status">
             <ToolIcon name="search" />
             <h3>No tools found</h3>
-            <p>Try a different search or browse all four tools.</p>
+            <p>Try a different search or browse all tools.</p>
             <button
               className="secondary-button"
               onClick={() => {
