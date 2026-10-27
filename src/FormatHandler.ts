@@ -44,6 +44,13 @@ export interface FormatHandler {
   supportAnyInput?: boolean;
 
   /**
+   * Optional sink for human-readable progress from long-running handlers
+   * (model downloads, OCR, speech synthesis). The conversion engine sets it
+   * for the duration of {@link doConvert} and clears it afterwards.
+   */
+  onProgress?: (message: string) => void;
+
+  /**
    * Whether the handler is ready for use. Should be set in {@link init}.
    * If true, {@link doConvert} is expected to work.
    */
@@ -68,6 +75,20 @@ export interface FormatHandler {
     outputFormat: FileFormat,
     args?: string[]
   ) => Promise<FileData[]>;
+}
+
+/**
+ * A failure that should end the whole conversion instead of letting the route
+ * search fall back to a different (usually much less meaningful) route. For
+ * example, if narration can't find any text in an image, the user should see
+ * that error rather than a spectrogram "sound" of the pixels.
+ */
+export class FatalConversionError extends Error {
+  readonly fatal = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "FatalConversionError";
+  }
 }
 
 export class ConvertPathNode {

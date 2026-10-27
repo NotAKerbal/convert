@@ -1,12 +1,10 @@
-import type { ConvertPathNode, FileData, FileFormat, FormatHandler } from "../FormatHandler.ts";
+import type { ConvertPathNode, FileData, FileFormat } from "../FormatHandler.ts";
 import handlers from "../handlers";
 import normalizeMimeType from "../normalizeMimeType.ts";
 import JSZip from "jszip";
+import { searchConvertPath, type FormatOption, type ProgressCallbacks } from "./routeSearch.ts";
 
-export interface FormatOption {
-  format: FileFormat;
-  handler: FormatHandler;
-}
+export type { FormatOption, ProgressCallbacks, RouteProgress, RouteStep } from "./routeSearch.ts";
 
 export interface FormatLists {
   allOptions: FormatOption[];
@@ -30,25 +28,6 @@ export interface OutputFile {
 export interface ConversionFailure {
   name: string;
   reason: string;
-}
-
-export interface RouteStep {
-  format: string;
-  handler?: string;
-  status: "pending" | "active" | "done" | "failed";
-}
-
-export interface RouteProgress {
-  phase: "searching" | "converting" | "done" | "error";
-  steps: RouteStep[];
-  currentStepIndex: number;
-  pathsExplored: number;
-  message?: string;
-}
-
-export interface ProgressCallbacks {
-  onStatus?: (title: string, detail?: string) => void;
-  onRouteProgress?: (info: RouteProgress) => void;
 }
 
 // ── category helpers ──
@@ -350,184 +329,6 @@ export function getDetectedInputSummary(
   };
 }
 
-// ── conversion engine internals ──
-
-const conversionsFromAnyInput: ConvertPathNode[] = handlers
-  .filter((h) => h.supportAnyInput && h.supportedFormats)
-  .flatMap((h) => h.supportedFormats!.filter((f) => f.to).map((f) => ({ handler: h, format: f })));
-
-const convertPathCache: Array<{ files: FileData[]; node: ConvertPathNode }> = [];
-
-function buildRouteSteps(path: ConvertPathNode[]): RouteStep[] {
-  return path.map((node, i) => ({
-    format: node.format.format.toUpperCase(),
-    handler: i > 0 ? node.handler.name : undefined,
-    status: "pending" as const,
-  }));
-}
-
-async function attemptConvertPath(
-  files: FileData[],
-  path: ConvertPathNode[],
-  pathsExplored: number,
-  progress?: ProgressCallbacks
-) {
-  const steps = buildRouteSteps(path);
-
-  progress?.onRouteProgress?.({
-    phase: "converting",
-    steps,
-    currentStepIndex: 0,
-    pathsExplored,
-    message: `Attempting ${steps.map((s) => s.format).join(" \u2192 ")}`,
-  });
-
-  const cacheLast = convertPathCache.at(-1);
-  if (cacheLast) files = cacheLast.files;
-
-  const start = cacheLast ? convertPathCache.length : 0;
-  for (let i = start; i < path.length - 1; i++) {
-    const handler = path[i + 1].handler;
-
-    for (let s = 0; s <= i; s++) steps[s].status = "done";
-    steps[i + 1].status = "active";
-    progress?.onRouteProgress?.({
-      phase: "converting",
-      steps: steps.map((s) => ({ ...s })),
-      currentStepIndex: i + 1,
-      pathsExplored,
-      message: `Converting via ${handler.name}`,
-    });
-
-    try {
-      let formats = supportedFormatCache.get(handler.name);
-      if (!handler.ready) {
-        try { await handler.init(); } catch { return null; }
-        if (handler.supportedFormats) {
-          supportedFormatCache.set(handler.name, handler.supportedFormats);
-          formats = handler.supportedFormats;
-        }
-      }
-      if (!formats) throw new Error(`Handler "${handler.name}" doesn't support any formats.`);
-      const inputFormat = formats.find((f) => f.mime === path[i].format.mime && f.from);
-      if (!inputFormat) throw new Error("Intermediate format not supported.");
-      files = await handler.doConvert(files, inputFormat, path[i + 1].format);
-      if (files.some((f) => !f.bytes.length)) throw new Error("Output is empty.");
-      convertPathCache.push({ files, node: path[i + 1] });
-
-      steps[i + 1].status = "done";
-    } catch (err) {
-      steps[i + 1].status = "failed";
-      progress?.onRouteProgress?.({
-        phase: "converting",
-        steps: steps.map((s) => ({ ...s })),
-        currentStepIndex: i + 1,
-        pathsExplored,
-        message: `Failed at ${handler.name}: ${path[i].format.format} \u2192 ${path[i + 1].format.format}`,
-      });
-      console.error(handler.name, `${path[i].format.format} -> ${path[i + 1].format.format}`, err);
-      return null;
-    }
-  }
-
-  return { files, path };
-}
-
-async function buildConvertPath(
-  files: FileData[],
-  target: ConvertPathNode,
-  queue: ConvertPathNode[][],
-  simpleMode: boolean,
-  allOptions: FormatOption[],
-  progress?: ProgressCallbacks
-) {
-  convertPathCache.length = 0;
-  const visited = new Set<string>();
-  const deadEnds = new Set<string>();
-  let nestedChecked = false;
-  let pathsExplored = 0;
-
-  while (queue.length > 0) {
-    const path = queue.shift();
-    if (!path || path.length > 5) continue;
-
-    for (let i = 1; i < path.length; i++) {
-      if (path[i] !== convertPathCache[i]?.node) {
-        convertPathCache.length = i - 1;
-        break;
-      }
-    }
-
-    const prev = path[path.length - 1];
-    const valid = handlers.filter((h) =>
-      supportedFormatCache.get(h.name)?.some((f) => f.mime === prev.format.mime && f.from)
-    );
-
-    if (!valid.length) { deadEnds.add(prev.format.format); continue; }
-    if (deadEnds.has(prev.format.format)) continue;
-
-    if (simpleMode) {
-      const candidates = allOptions.filter((o) =>
-        valid.includes(o.handler) && o.format.mime === target.format.mime && o.format.to
-      );
-      // Several formats can share a MIME type (e.g. mp3 and mp2 are both
-      // audio/mpeg). Prefer the exact format the user picked so the output
-      // matches their choice, falling back to MIME-compatible alternatives.
-      candidates.sort((a, b) =>
-        (a.format.format === target.format.format ? 0 : 1)
-        - (b.format.format === target.format.format ? 0 : 1)
-      );
-      for (const c of candidates) {
-        pathsExplored++;
-        progress?.onRouteProgress?.({
-          phase: "searching",
-          steps: buildRouteSteps(path.concat(c)),
-          currentStepIndex: -1,
-          pathsExplored,
-          message: `Searching... (${pathsExplored} routes explored, ${queue.length} queued)`,
-        });
-        const r = await attemptConvertPath(files, path.concat(c), pathsExplored, progress);
-        if (r) return r;
-      }
-    } else if (valid.includes(target.handler)) {
-      pathsExplored++;
-      progress?.onRouteProgress?.({
-        phase: "searching",
-        steps: buildRouteSteps(path.concat(target)),
-        currentStepIndex: -1,
-        pathsExplored,
-        message: `Searching... (${pathsExplored} routes explored, ${queue.length} queued)`,
-      });
-      const r = await attemptConvertPath(files, path.concat(target), pathsExplored, progress);
-      if (r) return r;
-    }
-
-    if (!nestedChecked) {
-      for (const c of conversionsFromAnyInput.filter((e) => e.format.mime === target.format.mime)) {
-        pathsExplored++;
-        const r = await attemptConvertPath(files, path.concat(c), pathsExplored, progress);
-        if (r) return r;
-      }
-      nestedChecked = true;
-    }
-
-    for (const h of valid) {
-      const fmts = supportedFormatCache.get(h.name);
-      if (!fmts) continue;
-      for (const f of fmts) {
-        if (!f.to || !f.mime || path.some((e) => e.format === f)) continue;
-        const np = path.concat({ format: f, handler: h });
-        const sig = np.map((e) => e.format.format).join("\u2022");
-        if (visited.has(sig)) continue;
-        visited.add(sig);
-        queue.push(np);
-      }
-    }
-  }
-
-  return null;
-}
-
 // ── public conversion API (no auto-download) ──
 
 function toOutputFile(fd: FileData, mime: string): OutputFile {
@@ -574,9 +375,16 @@ export async function runConversion(params: {
   }
 
   progress?.onStatus?.("Finding conversion route...");
-  const output = await buildConvertPath(
-    inputData, outputOption, [[inputOption]], simpleMode, allOptions, progress
-  );
+  const output = await searchConvertPath({
+    handlers,
+    formatCache: supportedFormatCache,
+    files: inputData,
+    input: inputOption,
+    target: outputOption,
+    simpleMode,
+    allOptions,
+    progress,
+  });
   if (!output) throw new Error("Failed to find conversion route.");
 
   // When a single source file expands into several output files (e.g. a PDF

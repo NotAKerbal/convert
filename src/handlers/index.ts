@@ -1,6 +1,7 @@
 import type { FormatHandler } from "../FormatHandler.ts";
 
 import canvasToBlobLiteHandler from "./canvasToBlobLite.ts";
+import narrationHandler from "./narration.ts";
 import meydaHandler from "./meyda.ts";
 import htmlEmbedHandler from "./htmlEmbed.ts";
 import FFmpegHandler from "./FFmpeg.ts";
@@ -27,6 +28,8 @@ import textEncodingHandler from "./textEncoding.ts";
 const handlers: FormatHandler[] = [];
 try { handlers.push(new svgTraceHandler()) } catch (_) { };
 try { handlers.push(new canvasToBlobLiteHandler()) } catch (_) { };
+// Before meyda so spoken narration is the default image/text -> WAV handler.
+try { handlers.push(new narrationHandler()) } catch (_) { };
 try { handlers.push(new meydaHandler()) } catch (_) { };
 try { handlers.push(new htmlEmbedHandler()) } catch (_) { };
 try { handlers.push(new FFmpegHandler()) } catch (_) { };

@@ -28,6 +28,20 @@ With the app running, `npm run test:document` checks document formatting, undo/r
 
 For Chrome integration checks, start the production app with `npm start -- --port 3100`, then run `npm run test:browser`. Override `TEST_BASE_URL` or `CHROME_PATH` if needed. The checks decode the generated QR images, verify downloads and text/JSON actions, check mobile layouts, and convert a generated PNG to JPEG.
 
+### Text and image narration
+
+In simple mode, converting a text file or an image to audio (WAV, MP3, or any other audio format) reads the text aloud:
+
+- Images go through [Tesseract](https://github.com/naptha/tesseract.js) OCR (English, LSTM engine). Before recognition the image is flattened onto white, converted to grayscale, inverted if it is light-on-dark, and resized so small text is legible.
+- The text is cleaned up (rejoining wrapped lines and hyphenated words, dropping OCR noise), split into sentence-sized chunks so nothing is truncated, and spoken by [Kokoro](https://github.com/hexgrad/kokoro/tree/main/kokoro.js) (`onnx-community/Kokoro-82M-v1.0-ONNX`) using its top-rated `af_heart` voice. Kokoro runs in a web worker on WebGPU (full-precision model, about 326 MB) when available, or on the CPU via WebAssembly (8-bit model, about 92 MB).
+- The result is a 24 kHz mono WAV. Other audio formats are encoded from it by the normal conversion route (for example FFmpeg for MP3).
+
+Nothing is downloaded until the first narration. The voice model then comes from the Hugging Face Hub once and is kept in the browser's cache. OCR and ONNX Runtime files are served by this site from `public/wasm` (copied by `npm run copy:wasm`). Text and images never leave the browser.
+
+If an image has no readable text, or a text file is empty, the conversion fails with an explanation. It does not fall back to another kind of "audio" such as a spectrogram. Advanced mode still lists the original handlers, so you can pick meyda's spectrogram WAV explicitly.
+
+To check narration in Chrome with the real OCR and voice model, start the production app, then run `npm run test:narration` (with `TEST_BASE_URL` if not on port 3100). The test uses a fresh browser profile, so it downloads the voice model each time it runs. It checks lazy loading, OCR accuracy on a generated image, progress messages, WAV format, MP3 routing, the duration and waveform of the speech, and the error messages.
+
 Many online file conversion tools are **boring** and **insecure**. They only allow conversion between two formats in the same medium (images to images, videos to videos, etc.), and they require that you _upload your files to some server_.
 
 This is not just terrible for privacy, it's also incredibly lame. What if you _really_ need to convert an AVI video to a PDF document? Try to find an online tool for that, I dare you.

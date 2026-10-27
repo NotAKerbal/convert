@@ -35,6 +35,24 @@ const targets = [
   {
     source: path.join(root, "node_modules", "pdfjs-dist", "build", "pdf.worker.min.mjs"),
     destination: path.join(outDir, "pdf.worker.min.mjs")
+  },
+  // Narration: ONNX Runtime for the Kokoro voice model, plus Tesseract OCR
+  // (worker, LSTM engine builds, and English data) so neither loads from a CDN.
+  ...["ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.jsep.wasm"].map((file) => ({
+    source: path.join(root, "node_modules", "onnxruntime-web", "dist", file),
+    destination: path.join(outDir, "ort", file)
+  })),
+  {
+    source: path.join(root, "node_modules", "tesseract.js", "dist", "worker.min.js"),
+    destination: path.join(outDir, "tesseract", "worker.min.js")
+  },
+  ...["tesseract-core-lstm.wasm.js", "tesseract-core-simd-lstm.wasm.js", "tesseract-core-relaxedsimd-lstm.wasm.js"].map((file) => ({
+    source: path.join(root, "node_modules", "tesseract.js-core", file),
+    destination: path.join(outDir, "tesseract", file)
+  })),
+  {
+    source: path.join(root, "node_modules", "@tesseract.js-data", "eng", "4.0.0_best_int", "eng.traineddata.gz"),
+    destination: path.join(outDir, "tesseract", "lang", "eng.traineddata.gz")
   }
 ];
 
@@ -43,6 +61,7 @@ await mkdir(outDir, { recursive: true });
 for (const target of targets) {
   try {
     await access(target.source);
+    await mkdir(path.dirname(target.destination), { recursive: true });
     await cp(target.source, target.destination, { force: true });
   } catch {
     console.warn(`Skipping missing asset: ${path.relative(root, target.source)}`);
