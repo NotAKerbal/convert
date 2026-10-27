@@ -40,6 +40,15 @@ test("normalizing keeps paragraphs and ends headings and bullets as sentences", 
   );
 });
 
+test("line-oriented text beyond the function argument limit still reaches chunking", () => {
+  const lineCount = 150000;
+  const { text, chunks } = prepareNarration("Hello.\n".repeat(lineCount));
+  assert.equal(text, Array(lineCount).fill("Hello.").join(" "));
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((chunk) => chunk.text.length <= 300));
+  assert.equal(chunks.map((chunk) => chunk.text).join(" "), text);
+});
+
 test("OCR cleanup drops lines without letters or digits", () => {
   assert.equal(cleanOcrText("| — |\nHello there\n~ ~\n\nPage 2"), "Hello there\n\nPage 2");
 });

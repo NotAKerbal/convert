@@ -126,6 +126,7 @@ async function handleSpeak({ id, chunks, voice = KOKORO_DEFAULT_VOICE }: Narrati
       if (loaded.device !== "webgpu") throw err;
       console.warn("Kokoro failed on WebGPU; retrying with WASM.", err);
       model = loadModel("wasm", id);
+      model.catch(() => { model = null; });
       loaded = await model;
       pieces = await speak(loaded, chunks[index].text, voice);
     }

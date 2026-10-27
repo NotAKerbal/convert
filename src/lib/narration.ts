@@ -132,7 +132,7 @@ export function normalizeNarrationText(raw: string) {
       .filter((line) => line.text);
     // Hard-wrapped prose fills most of the column; a line well short of it
     // that is followed by a capitalized line is a heading or list entry.
-    const width = Math.max(...lines.map((line) => line.text.length));
+    const width = lines.reduce((max, line) => Math.max(max, line.text.length), 0);
     let paragraph = "";
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i].text;
