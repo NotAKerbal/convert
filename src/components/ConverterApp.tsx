@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { uniquifyOutputNames } from "../lib/outputNames.ts";
+
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
   cropOutputImage,
@@ -123,9 +125,10 @@ function renderCategoryChips(
   if (counts.length <= 1) return null;
   const total = counts.reduce((sum, entry) => sum + entry.count, 0);
   return (
-    <div className="category-chips" role="tablist" aria-label="Filter by type">
+    <div className="category-chips" role="group" aria-label="Filter by type">
       <button
         className={`category-chip${active === null ? " active" : ""}`}
+        aria-pressed={active === null}
         onClick={() => onPick(null)}
       >
         All
@@ -135,6 +138,7 @@ function renderCategoryChips(
         <button
           key={entry.category}
           className={`category-chip${active === entry.category ? " active" : ""}`}
+          aria-pressed={active === entry.category}
           style={{ "--cat-color": entry.color } as React.CSSProperties}
           onClick={() => onPick(active === entry.category ? null : entry.category)}
         >
@@ -147,24 +151,41 @@ function renderCategoryChips(
   );
 }
 
-function renameBeforeExtension(name: string, suffix: string) {
-  const dot = name.lastIndexOf(".");
-  if (dot <= 0) return `${name}${suffix}`;
-  return `${name.slice(0, dot)}${suffix}${name.slice(dot)}`;
-}
-
-function uniquifyOutputNames(files: OutputFile[]): OutputFile[] {
-  const seen = new Map<string, number>();
-  return files.map((file) => {
-    const count = seen.get(file.name) ?? 0;
-    seen.set(file.name, count + 1);
-    if (count === 0) return file;
-    return { ...file, name: renameBeforeExtension(file.name, `-${count + 1}`) };
-  });
-}
-
 function revokeOutputHistory(history: Record<number, OutputFile[]>) {
   Object.values(history).forEach((files) => revokeOutputFiles(files));
+}
+
+function plural(count: number, noun: string) {
+  return `${count} ${noun}${count !== 1 ? "s" : ""}`;
+}
+
+interface SelectedFileEntry {
+  file: File;
+  option: FormatOption | null;
+}
+
+/** "PNG ×2 · SVG ×1" style breakdown of the detected input formats. */
+function summarizeFormats(entries: SelectedFileEntry[]) {
+  const counts = new Map<string, number>();
+  for (const { option } of entries) {
+    const label = option ? option.format.format.toUpperCase() : "Unknown";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return Array.from(counts, ([label, count]) => ({ label, count }));
+}
+
+async function downloadOutputsAsZip(files: OutputFile[], name: string) {
+  const { default: JSZip } = await import("jszip");
+  const zip = new JSZip();
+  for (const file of files) zip.file(file.name, file.bytes);
+  const blob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  // Give the browser a moment to start the download before revoking.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 export function ConverterApp() {
@@ -192,6 +213,7 @@ export function ConverterApp() {
   const [conversionFailures, setConversionFailures] = useState<ConversionFailure[]>([]);
   const [editOutputsOpen, setEditOutputsOpen] = useState(false);
   const [outputHistory, setOutputHistory] = useState<Record<number, OutputFile[]>>({});
+  const [zipping, setZipping] = useState(false);
 
   const [popup, setPopup] = useState<PopupState>({
     open: false,
@@ -631,6 +653,7 @@ export function ConverterApp() {
       key={index}
       className={`format-card${isSelected ? " selected" : ""}`}
       style={{ "--cat-color": catColor } as React.CSSProperties}
+      aria-pressed={isSelected}
       onClick={onSelect}
     >
       <span className="ext" style={{ color: catColor }}>{option.format.extension.slice(0, 5)}</span>
@@ -669,9 +692,33 @@ export function ConverterApp() {
   );
 
   const inputOpt = selectedInputIdx !== null ? lists.allOptions[selectedInputIdx] : null;
+  const fileCount = selectedFiles.length;
+  const targetCount = selectedOutputIndices.size;
+  const isBatch = fileCount > 1;
+  // Mirrors onConvert: a mixed batch uses each file's detected format, anything
+  // else converts every file with the single chosen input format.
+  const fileEntries: SelectedFileEntry[] = detectedInputSummary.detected.map(({ file, option }) => ({
+    file,
+    option: canUseDetectedBatch ? option : inputOpt ?? option,
+  }));
+  const totalInputSize = selectedFiles.reduce((sum, file) => sum + file.size, 0);
+  const detectedFormats = summarizeFormats(fileEntries).map(({ label }) => label);
   const inputSummaryLabel = canUseDetectedBatch
-    ? `${detectedInputSummary.formatCount} input formats`
-    : inputOpt?.format.format.toUpperCase();
+    ? `${plural(fileCount, "file")} · ${detectedFormats.length <= 3
+      ? detectedFormats.join(" + ")
+      : `${detectedFormats.length} input formats`}`
+    : isBatch
+      ? `${fileCount} ${inputOpt?.format.format.toUpperCase()} files`
+      : inputOpt?.format.format.toUpperCase();
+  const firstTargetLabel = targetCount === 1
+    ? lists.allOptions[Array.from(selectedOutputIndices)[0]]?.format.format.toUpperCase()
+    : "";
+  const convertLabel = isBatch
+    ? `Convert ${plural(fileCount, "file")} to ${targetCount === 1 ? firstTargetLabel : `${targetCount} formats`}`
+    : targetCount > 1
+      ? `Convert to ${targetCount} formats`
+      : "Convert Now";
+  const failedLabel = plural(conversionFailures.length, "conversion");
 
   return (
     <main className="page converter-page" id="main-content">
@@ -722,22 +769,33 @@ export function ConverterApp() {
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") fileInputRef.current?.click();
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
             }}
           >
             {selectedFiles.length === 0 ? (
               <>
                 <h2>Click to add your files</h2>
-                <p>or drag &amp; drop it here &middot; paste also works</p>
+                <p>or drag &amp; drop them here &middot; paste also works</p>
+                <p className="drop-zone-batch">
+                  <span className="drop-zone-batch-badge">Batch</span>
+                  Select several files at once &mdash; even mixed types
+                </p>
               </>
             ) : (
-              <div>
-                <h2>{selectedFiles[0].name}</h2>
-                {selectedFiles.length > 1 && <p>and {selectedFiles.length - 1} more</p>}
-                <p>Could not auto-detect format &mdash; please select below</p>
+              <div className="drop-zone-file">
+                <h2>{isBatch ? `${plural(fileCount, "file")} selected` : selectedFiles[0].name}</h2>
+                <p>
+                  Could not auto-detect {isBatch ? "every file's" : "the"} format &mdash; pick
+                  {isBatch ? " one format for all files" : " it"} below
+                </p>
               </div>
             )}
           </div>
+
+          {isBatch && <SelectedFiles entries={fileEntries} totalSize={totalInputSize} />}
 
           {!loadingFormats && lists.inputIndices.length > 0 && (
             <section>
@@ -788,45 +846,60 @@ export function ConverterApp() {
             onClick={() => fileInputRef.current?.click()}
             role="button"
             tabIndex={0}
+            aria-label={`${isBatch ? `${plural(fileCount, "file")} selected` : selectedFiles[0]?.name}. Choose different files`}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") fileInputRef.current?.click();
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
             }}
           >
-            <div>
-              <h2>{selectedFiles[0]?.name}</h2>
-              {selectedFiles.length > 1 && <p>and {selectedFiles.length - 1} more</p>}
+            <div className="drop-zone-file">
+              <h2>{isBatch ? `${plural(fileCount, "file")} selected` : selectedFiles[0]?.name}</h2>
               {inputOpt && (
                 <p>
                   Detected as <strong>{inputOpt.format.format.toUpperCase()}</strong>
-                  {" "}
-                  <button
-                    className="change-format-link"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedInputIdx(null);
-                      setSelectedOutputIndices(new Set());
-                      setOutputCollapsed(false);
-                    }}
-                  >
-                    Change
-                  </button>
+                  {isBatch && <> &middot; {formatFileSize(totalInputSize)} total</>}
                 </p>
               )}
               {!inputOpt && canUseDetectedBatch && (
                 <p>
-                  Detected <strong>{detectedInputSummary.formatCount} input formats</strong>
-                  {" "}across {selectedFiles.length} files
+                  Mixed batch: <strong>{detectedInputSummary.formatCount} input formats</strong>
+                  {" "}&middot; {formatFileSize(totalInputSize)} total
                 </p>
               )}
             </div>
           </div>
 
-          <button className="change-link" onClick={restart}>&larr; Choose a different file</button>
+          {isBatch && <SelectedFiles entries={fileEntries} totalSize={totalInputSize} />}
+
+          <div className="change-links">
+            <button className="change-link" onClick={restart}>
+              &larr; Choose different {isBatch ? "files" : "file"}
+            </button>
+            {inputOpt && (
+              <button
+                className="change-format-link"
+                onClick={() => {
+                  setSelectedInputIdx(null);
+                  setSelectedOutputIndices(new Set());
+                  setOutputCollapsed(false);
+                }}
+              >
+                Change input format
+              </button>
+            )}
+          </div>
 
           <section style={{ marginTop: 20 }}>
             <div className="step-label">
               Convert to
-              <span className="bulk-hint">select one or more formats</span>
+              <span className="bulk-hint">
+                {isBatch
+                  ? `pick one or more formats for all ${fileCount} files`
+                  : "select one or more formats"}
+                {canUseDetectedBatch && " · only formats every file supports"}
+              </span>
             </div>
             <input
               className="search"
@@ -850,17 +923,19 @@ export function ConverterApp() {
         <>
           <div className="summary">
             <span className="tag">{inputSummaryLabel}</span>
-            <span className="arrow">&rarr;</span>
-            <span className="tag-group">
+            <span className="arrow" aria-hidden="true">&rarr;</span>
+            <span className="tag-group" aria-label="Selected output formats">
               {Array.from(selectedOutputIndices).map((idx) => {
                 const opt = lists.allOptions[idx];
+                const label = opt.format.format.toUpperCase();
                 return (
                   <span key={idx} className="tag">
-                    {opt.format.format.toUpperCase()}
+                    {label}
                     <button
                       className="tag-remove"
                       onClick={() => toggleOutput(idx)}
-                      title="Remove"
+                      title={`Remove ${label}`}
+                      aria-label={`Remove ${label}`}
                     >
                       &times;
                     </button>
@@ -872,31 +947,40 @@ export function ConverterApp() {
 
           <div className="summary-meta">
             <p>
-              {selectedFiles[0]?.name}
-              {selectedFiles.length > 1 ? ` + ${selectedFiles.length - 1} more` : ""}
+              {isBatch
+                ? `${plural(fileCount, "file")} \u00b7 ${formatFileSize(totalInputSize)}`
+                : selectedFiles[0]?.name}
             </p>
-            <button className="change-link" onClick={restart}>Change file</button>
+            <button className="change-link" onClick={restart}>
+              Change {isBatch ? "files" : "file"}
+            </button>
           </div>
+
+          {isBatch && (
+            <SelectedFiles entries={fileEntries} totalSize={totalInputSize} collapsible />
+          )}
 
           <button
             className="convert-btn"
             onClick={onConvert}
             disabled={converting || loadingFormats}
           >
-            {converting
-              ? "Converting\u2026"
-              : selectedOutputIndices.size > 1
-                ? `Convert to ${selectedOutputIndices.size} formats`
-                : "Convert Now"}
+            {converting ? "Converting\u2026" : convertLabel}
           </button>
+          {isBatch && targetCount > 1 && (
+            <p className="convert-plan">
+              Each file is converted to every selected format ({fileCount} &times; {targetCount})
+            </p>
+          )}
 
           <section style={{ marginTop: 24 }}>
             <button
               className="collapsible-toggle"
+              aria-expanded={!outputCollapsed}
               onClick={() => setOutputCollapsed((v) => !v)}
             >
-              <span className={`chevron${outputCollapsed ? "" : " open"}`}>&#9654;</span>
-              {outputCollapsed ? "Show output formats" : "Hide output formats"}
+              <span className={`chevron${outputCollapsed ? "" : " open"}`} aria-hidden="true">&#9654;</span>
+              {outputCollapsed ? "Add or change output formats" : "Hide output formats"}
             </button>
 
             {!outputCollapsed && (
@@ -930,7 +1014,44 @@ export function ConverterApp() {
                 : "Conversion Complete"
               : "Conversion Failed"}
           </h2>
+          <p className="results-summary" role="status">
+            {results.length > 0 && `${plural(results.length, "file")} ready`}
+            {results.length > 0 && conversionFailures.length > 0 && " · "}
+            {conversionFailures.length > 0 && (
+              <span className="results-summary-failed">{failedLabel} failed</span>
+            )}
+          </p>
           {resultPath && <p className="results-path">Route: {resultPath}</p>}
+
+          {results.length > 1 && (
+            <div className="download-all-bar">
+              <button
+                className="download-all-btn"
+                disabled={zipping}
+                onClick={async () => {
+                  setZipping(true);
+                  try {
+                    await downloadOutputsAsZip(results, "converted-files.zip");
+                  } catch (err) {
+                    console.error(err);
+                    setPopup({
+                      open: true,
+                      title: "Could not create ZIP",
+                      detail: err instanceof Error ? err.message : String(err),
+                      closable: true,
+                    });
+                  } finally {
+                    setZipping(false);
+                  }
+                }}
+              >
+                {zipping ? "Preparing ZIP…" : `Download all as ZIP (${plural(results.length, "file")})`}
+              </button>
+              <span className="download-all-size">
+                {formatFileSize(results.reduce((sum, file) => sum + file.size, 0))} total
+              </span>
+            </div>
+          )}
 
           {results.length > 0 && (
             <div className="results-list">
@@ -980,7 +1101,11 @@ export function ConverterApp() {
                         <span className="result-name">{file.name}</span>
                         <span className="result-size">{formatFileSize(file.size)}</span>
                       </div>
-                      <button className="download-btn" onClick={() => downloadOutputFile(file)}>
+                      <button
+                        className="download-btn"
+                        aria-label={`Download ${file.name}`}
+                        onClick={() => downloadOutputFile(file)}
+                      >
                         Download
                       </button>
                     </div>
@@ -992,7 +1117,7 @@ export function ConverterApp() {
 
           {conversionFailures.length > 0 && (
             <div className="failure-list">
-              <h3>{conversionFailures.length} file{conversionFailures.length !== 1 ? "s" : ""} skipped</h3>
+              <h3>{failedLabel} failed</h3>
               {conversionFailures.map((failure, i) => (
                 <div key={i} className="failure-row">
                   <span className="failure-name">{failure.name}</span>
@@ -1000,15 +1125,6 @@ export function ConverterApp() {
                 </div>
               ))}
             </div>
-          )}
-
-          {results.length > 1 && (
-            <button
-              className="download-all-btn"
-              onClick={() => results.forEach((f) => downloadOutputFile(f))}
-            >
-              Download All ({results.length} files)
-            </button>
           )}
 
           <button className="restart-btn-large" onClick={restart}>
@@ -1046,6 +1162,70 @@ export function ConverterApp() {
         </div>
       )}
     </main>
+  );
+}
+
+function SelectedFiles({
+  entries,
+  totalSize,
+  collapsible = false,
+}: {
+  entries: SelectedFileEntry[];
+  totalSize: number;
+  collapsible?: boolean;
+}) {
+  const listId = useId();
+  const [open, setOpen] = useState(!collapsible);
+  const formats = summarizeFormats(entries);
+  const title = `${plural(entries.length, "file")} · ${formatFileSize(totalSize)}`;
+
+  return (
+    <div className="selected-files">
+      <div className="selected-files-head">
+        {collapsible ? (
+          <button
+            className="selected-files-toggle"
+            aria-expanded={open}
+            aria-controls={listId}
+            onClick={() => setOpen((v) => !v)}
+          >
+            <span className={`chevron${open ? " open" : ""}`} aria-hidden="true">&#9654;</span>
+            {open ? "Hide files" : `Show ${plural(entries.length, "file")}`}
+          </button>
+        ) : (
+          <span className="selected-files-title">{title}</span>
+        )}
+        <span className="selected-files-formats" aria-label="Formats in this batch">
+          {formats.map(({ label, count }) => (
+            <span key={label} className={`selected-files-format${label === "Unknown" ? " unknown" : ""}`}>
+              {label} <span aria-label={`${count} files`}>&times;{count}</span>
+            </span>
+          ))}
+        </span>
+      </div>
+      {open && (
+        <ul
+          className="selected-files-list"
+          id={listId}
+          aria-label="Selected files"
+          tabIndex={entries.length > 6 ? 0 : undefined}
+        >
+          {entries.map(({ file, option }, i) => (
+            <li key={`${file.name}-${i}`} className="selected-file">
+              <span className="selected-file-ext">
+                {option ? option.format.extension.slice(0, 5) : "?"}
+              </span>
+              <span className="selected-file-name" title={file.name}>{file.name}</span>
+              <span className="selected-file-meta">
+                {option ? option.format.format.toUpperCase() : "Unknown"}
+                {" · "}
+                {formatFileSize(file.size)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -1386,7 +1566,11 @@ function ImageResultCard({
           <span className="result-name">{file.name}</span>
           <span className="result-size">{formatFileSize(file.size)}</span>
         </div>
-        <button className="download-btn" onClick={() => downloadOutputFile(file)}>
+        <button
+          className="download-btn"
+          aria-label={`Download ${file.name}`}
+          onClick={() => downloadOutputFile(file)}
+        >
           Download
         </button>
       </div>
