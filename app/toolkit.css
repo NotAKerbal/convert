@@ -1450,3 +1450,64 @@ html {
   .document-content h2,
   .document-content h3 { break-after: avoid; }
 }
+.tool-page-compact {
+  padding-top: 18px;
+}
+.tool-page-heading.tool-page-heading-compact {
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 18px;
+}
+.tool-page-heading.tool-page-heading-compact > .tool-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+.tool-page-heading.tool-page-heading-compact > .tool-icon svg {
+  width: 19px;
+  height: 19px;
+}
+.tool-page-heading-compact .tool-page-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 14px;
+  row-gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.tool-page-heading.tool-page-heading-compact h1 {
+  font-size: 22px;
+  letter-spacing: -0.5px;
+  line-height: 1.25;
+  margin: 0;
+}
+.tool-page-heading.tool-page-heading-compact .tool-page-title p {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  max-width: none;
+}
+.tool-page-heading-compact .back-to-tools {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+@media (max-width: 680px) {
+  .tool-page-compact {
+    padding-top: 14px;
+  }
+  .tool-page-heading.tool-page-heading-compact {
+    align-items: flex-start;
+    margin-bottom: 14px;
+  }
+  .tool-page-heading.tool-page-heading-compact h1 {
+    font-size: 20px;
+  }
+  .tool-page-heading.tool-page-heading-compact .tool-page-title p {
+    font-size: 11px;
+  }
+  .tool-page-heading-compact .back-to-tools {
+    margin-top: 9px;
+  }
+}
