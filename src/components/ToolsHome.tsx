@@ -128,7 +128,7 @@ export function ToolsHome() {
           <div className="no-tools" role="status">
             <ToolIcon name="search" />
             <h3>No tools found</h3>
-            <p>Try a different search or browse all four tools.</p>
+            <p>Try a different search or browse all tools.</p>
             <button
               className="secondary-button"
               onClick={() => {

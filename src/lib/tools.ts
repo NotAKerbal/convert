@@ -1,4 +1,4 @@
-export type ToolIconName = "convert" | "qr" | "text" | "json";
+export type ToolIconName = "convert" | "qr" | "text" | "json" | "document";
 export type ToolCategory = "Files" | "Create" | "Text & code";
 
 // Add a tool here and create its route to include it in the directory and navigation.
@@ -27,6 +27,18 @@ export const tools = [
     accent: "mint",
     keywords: "qr code generator url link wifi wi-fi email scan png svg",
     detail: "Custom colors · PNG & SVG",
+  },
+  {
+    slug: "document",
+    href: "/tools/document",
+    name: "Document editor",
+    description:
+      "A little space to write. Create and format documents, then take them with you.",
+    category: "Create",
+    icon: "document",
+    accent: "mint",
+    keywords: "document editor write rich text notes headings lists html txt print pdf",
+    detail: "Write, format & save locally",
   },
   {
     slug: "text",
