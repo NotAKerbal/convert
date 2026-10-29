@@ -1,5 +1,11 @@
-export type ToolIconName = "convert" | "qr" | "text" | "json" | "document";
-export type ToolCategory = "Files" | "Create" | "Text & code";
+export type ToolIconName =
+  | "convert"
+  | "qr"
+  | "units"
+  | "text"
+  | "json"
+  | "document";
+export type ToolCategory = "Files" | "Create" | "Calculate" | "Text & code";
 
 // Add a tool here and create its route to include it in the directory and navigation.
 export const tools = [
@@ -27,6 +33,19 @@ export const tools = [
     accent: "mint",
     keywords: "qr code generator url link wifi wi-fi email scan png svg",
     detail: "Custom colors · PNG & SVG",
+  },
+  {
+    slug: "unit-converter",
+    href: "/tools/unit-converter",
+    name: "Unit converter",
+    description:
+      "Length, temperature, cooking, data, fuel economy, and 35 more categories — exact, sourced, and fast.",
+    category: "Calculate",
+    icon: "units",
+    accent: "teal",
+    keywords:
+      "unit converter measurement length weight mass temperature celsius fahrenheit volume cups liters gallons speed pressure psi energy power data bytes mpg metric imperial",
+    detail: "40 categories · 440+ units",
   },
   {
     slug: "document",
