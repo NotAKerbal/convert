@@ -6,10 +6,12 @@ import { ToolIcon } from "./ToolIcon";
 export function ToolPage({
   slug,
   compact = false,
+  showDescription = true,
   children,
 }: {
   slug: string;
   compact?: boolean;
+  showDescription?: boolean;
   children: ReactNode;
 }) {
   const tool = tools.find((item) => item.slug === slug)!;
@@ -25,7 +27,7 @@ export function ToolPage({
           </span>
           <div className="tool-page-title">
             <h1>{tool.name}</h1>
-            <p>{tool.description}</p>
+            {showDescription && <p>{tool.description}</p>}
           </div>
           <Link href="/" className="back-to-tools">
             ← All tools
@@ -43,7 +45,7 @@ export function ToolPage({
             <div>
               <p className="eyebrow">{tool.category}</p>
               <h1>{tool.name}</h1>
-              <p>{tool.description}</p>
+              {showDescription && <p>{tool.description}</p>}
             </div>
           </div>
         </>

@@ -8,6 +8,7 @@ The Next.js app now opens to a searchable tools homepage. Every tool processes c
 - `/tools/convert` — the existing universal file converter, including batch conversion and image editing.
 - `/tools/qr-code` — QR codes for websites, text, Wi-Fi, and email, with color presets and PNG/SVG downloads.
 - `/tools/document` — a lightweight rich text editor with headings, lists, undo/redo, one locally autosaved draft, TXT/HTML imports and downloads, and print/PDF support. Pasted content is plain text; HTML imports retain basic formatting and remove links, images, styles, and embedded content. DOCX and PDF editing are not supported.
+- `/tools/unit-converter` — 40 categories and 440+ units, including US vs imperial vs metric cooking measures, absolute temperatures vs temperature differences, SI vs IEC data sizes, and reciprocal fuel economy. Conversions use exact rational definitions with cited sources (π-based units are marked approximate). It supports typed queries such as `5 ft 3 in to cm`, fractions and scientific notation, absolute-zero and fuel-economy domain checks, every-unit tables with copy, precision and notation controls, batch conversion with CSV download, saved conversions, and shareable links. Currency, screen pixels, and volume-to-mass cooking conversions are intentionally excluded.
 - `/tools/text` — word and character counts, case changes, whitespace cleanup, and text downloads.
 - `/tools/json` — JSON validation, formatting, minification, and downloads.
 
@@ -25,6 +26,8 @@ npm run dev
 Open `http://localhost:3000`. Run `npm run typecheck`, `npm test`, and `npm run build` to check changes. The original Vite app remains available separately; the toolkit homepage is part of the Next.js app.
 
 With the app running, `npm run test:document` checks document formatting, undo/redo, local draft recovery, safe imports, exports, printing, storage failures, and mobile layouts. It uses the same `TEST_BASE_URL` and `CHROME_PATH` overrides as the toolkit browser checks.
+
+With the app running, `npm run test:units` checks unit conversion, validation, swapping, typed queries, batch CSV export, favorites, share links, and mobile/light layouts. It uses the same `TEST_BASE_URL` and `CHROME_PATH` overrides.
 
 For Chrome integration checks, start the production app with `npm start -- --port 3100`, then run `npm run test:browser`. Override `TEST_BASE_URL` or `CHROME_PATH` if needed. The checks decode the generated QR images, verify downloads and text/JSON actions, check mobile layouts, and convert a generated PNG to JPEG.
 
