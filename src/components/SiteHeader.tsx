@@ -5,6 +5,12 @@ import { usePathname } from "next/navigation";
 import { tools } from "../lib/tools";
 import { ToolIcon } from "./ToolIcon";
 
+const navigation = [
+  { slug: "convert", label: "Converter" },
+  { slug: "qr-code", label: "QR generator" },
+  { slug: "unit-converter", label: "Units" },
+];
+
 export function SiteHeader() {
   const pathname = usePathname();
   return (
@@ -27,16 +33,19 @@ export function SiteHeader() {
           >
             All tools
           </Link>
-          {tools.slice(0, 2).map((tool) => (
-            <Link
-              key={tool.slug}
-              href={tool.href}
-              className={pathname === tool.href ? "current" : ""}
-              aria-current={pathname === tool.href ? "page" : undefined}
-            >
-              {tool.icon === "qr" ? "QR generator" : "Converter"}
-            </Link>
-          ))}
+          {navigation.map(({ slug, label }) => {
+            const tool = tools.find((item) => item.slug === slug)!;
+            return (
+              <Link
+                key={tool.slug}
+                href={tool.href}
+                className={pathname === tool.href ? "current" : ""}
+                aria-current={pathname === tool.href ? "page" : undefined}
+              >
+                {label}
+              </Link>
+            );
+          })}
         </nav>
         <span className="local-badge">
           <span /> Made to stay local

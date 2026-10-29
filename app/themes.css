@@ -20,6 +20,7 @@
   --tool-mint: #a4cdb2;
   --tool-lavender: #b9a7d6;
   --tool-blue: #9cb8d7;
+  --tool-teal: #86c9c0;
   --warm-card: #1b1713;
   --warm-glow: #30251a80;
   --green-card: #151b17;
@@ -79,6 +80,7 @@
     --tool-mint: #346b48;
     --tool-lavender: #7952a4;
     --tool-blue: #3d668e;
+    --tool-teal: #2b6b64;
     --warm-card: #fffbf3;
     --warm-glow: #f2dfbb60;
     --green-card: #f5faf3;
@@ -115,6 +117,10 @@
 
   .tool-blue {
     --tool-rgb: 61, 102, 142;
+  }
+
+  .tool-teal {
+    --tool-rgb: 43, 107, 100;
   }
 
   /* The converter shares these tokens; generated images keep their own colors. */

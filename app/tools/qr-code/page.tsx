@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 
 export default function QrCodePage() {
   return (
-    <ToolPage slug="qr-code">
+    <ToolPage slug="qr-code" compact>
       <QrCodeTool />
     </ToolPage>
   );

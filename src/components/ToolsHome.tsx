@@ -5,7 +5,13 @@ import { useState } from "react";
 import { tools, type ToolCategory } from "../lib/tools";
 import { ToolIcon } from "./ToolIcon";
 
-const categories = ["All tools", "Files", "Create", "Text & code"] as const;
+const categories = [
+  "All tools",
+  "Files",
+  "Create",
+  "Calculate",
+  "Text & code",
+] as const;
 
 export function ToolsHome() {
   const [search, setSearch] = useState("");

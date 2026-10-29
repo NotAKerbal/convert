@@ -8,6 +8,7 @@ The Next.js app now opens to a searchable tools homepage. Every tool processes c
 - `/tools/convert` — the existing universal file converter, including batch conversion and image editing.
 - `/tools/qr-code` — QR codes for websites, text, Wi-Fi, and email, with color presets and PNG/SVG downloads.
 - `/tools/document` — a lightweight rich text editor with headings, lists, undo/redo, one locally autosaved draft, TXT/HTML imports and downloads, and print/PDF support. Pasted content is plain text; HTML imports retain basic formatting and remove links, images, styles, and embedded content. DOCX and PDF editing are not supported.
+- `/tools/unit-converter` — 40 categories and 440+ units, including US vs imperial vs metric cooking measures, absolute temperatures vs temperature differences, SI vs IEC data sizes, and reciprocal fuel economy. Conversions use exact rational definitions with cited sources (π-based units are marked approximate). It supports typed queries such as `5 ft 3 in to cm`, fractions and scientific notation, absolute-zero and fuel-economy domain checks, every-unit tables with copy, precision and notation controls, batch conversion with CSV download, saved conversions, and shareable links. Currency, screen pixels, and volume-to-mass cooking conversions are intentionally excluded.
 - `/tools/text` — word and character counts, case changes, whitespace cleanup, and text downloads.
 - `/tools/json` — JSON validation, formatting, minification, and downloads.
 
@@ -26,7 +27,23 @@ Open `http://localhost:3000`. Run `npm run typecheck`, `npm test`, and `npm run 
 
 With the app running, `npm run test:document` checks document formatting, undo/redo, local draft recovery, safe imports, exports, printing, storage failures, and mobile layouts. It uses the same `TEST_BASE_URL` and `CHROME_PATH` overrides as the toolkit browser checks.
 
+With the app running, `npm run test:units` checks unit conversion, validation, swapping, typed queries, batch CSV export, favorites, share links, and mobile/light layouts. It uses the same `TEST_BASE_URL` and `CHROME_PATH` overrides.
+
 For Chrome integration checks, start the production app with `npm start -- --port 3100`, then run `npm run test:browser`. Override `TEST_BASE_URL` or `CHROME_PATH` if needed. The checks decode the generated QR images, verify downloads and text/JSON actions, check mobile layouts, and convert a generated PNG to JPEG.
+
+### Text and image narration
+
+In simple mode, converting a text file or an image to audio (WAV, MP3, or any other audio format) reads the text aloud:
+
+- Images go through [Tesseract](https://github.com/naptha/tesseract.js) OCR (English, LSTM engine). Before recognition the image is flattened onto white, converted to grayscale, inverted if it is light-on-dark, and resized so small text is legible.
+- The text is cleaned up (rejoining wrapped lines and hyphenated words, dropping OCR noise), split into sentence-sized chunks so nothing is truncated, and spoken by [Kokoro](https://github.com/hexgrad/kokoro/tree/main/kokoro.js) (`onnx-community/Kokoro-82M-v1.0-ONNX`) using its top-rated `af_heart` voice. Kokoro runs in a web worker on WebGPU (full-precision model, about 326 MB) when available, or on the CPU via WebAssembly (8-bit model, about 92 MB).
+- The result is a 24 kHz mono WAV. Other audio formats are encoded from it by the normal conversion route (for example FFmpeg for MP3).
+
+Nothing is downloaded until the first narration. The voice model then comes from the Hugging Face Hub once and is kept in the browser's cache. OCR and ONNX Runtime files are served by this site from `public/wasm` (copied by `npm run copy:wasm`). Text and images never leave the browser.
+
+If an image has no readable text, or a text file is empty, the conversion fails with an explanation. It does not fall back to another kind of "audio" such as a spectrogram. Advanced mode still lists the original handlers, so you can pick meyda's spectrogram WAV explicitly.
+
+To check narration in Chrome with the real OCR and voice model, start the production app, then run `npm run test:narration` (with `TEST_BASE_URL` if not on port 3100). The test uses a fresh browser profile, so it downloads the voice model each time it runs. It checks lazy loading, OCR accuracy on a generated image, progress messages, WAV format, MP3 routing, the duration and waveform of the speech, and the error messages.
 
 Many online file conversion tools are **boring** and **insecure**. They only allow conversion between two formats in the same medium (images to images, videos to videos, etc.), and they require that you _upload your files to some server_.
 

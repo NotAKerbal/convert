@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import puppeteer from "puppeteer";
 import jsQR from "jsqr";
+import JSZip from "jszip";
 
 // Run against a built app: npm start -- --port 3100, then npm run test:browser.
 const baseUrl = process.env.TEST_BASE_URL || "http://localhost:3100";
@@ -136,7 +137,14 @@ try {
   await themePage.emulateMediaFeatures([
     { name: "prefers-color-scheme", value: "light" },
   ]);
-  for (const slug of ["qr-code", "text", "json", "document", "convert"]) {
+  for (const slug of [
+    "qr-code",
+    "unit-converter",
+    "text",
+    "json",
+    "document",
+    "convert",
+  ]) {
     await themePage.goto(`${baseUrl}/tools/${slug}`, {
       waitUntil: "networkidle0",
     });
@@ -175,7 +183,7 @@ try {
     { name: "prefers-color-scheme", value: "dark" },
   ]);
   await page.goto(baseUrl, { waitUntil: "networkidle0" });
-  assert.equal(await page.$$eval(".tool-card", (cards) => cards.length), 5);
+  assert.equal(await page.$$eval(".tool-card", (cards) => cards.length), 6);
   await noOverflow();
   await page.screenshot({
     path: path.join(artifacts, "homepage-desktop.png"),
@@ -378,6 +386,146 @@ try {
   });
   console.log(
     `PASS: converter loads its format cache and converts the generated PNG to JPEG. Artifacts: ${artifacts}`,
+  );
+
+  // ── bulk conversion: same-type batch, multiple targets, ZIP, narrow screen ──
+  const batchDir = path.join(artifacts, "batch");
+  await mkdir(batchDir);
+  const longName =
+    "a-very-long-holiday-photo-name-that-should-never-push-the-layout-wider-than-the-phone.png";
+  const batchPngs = ["alpha.png", "beta.png", longName].map((name) =>
+    path.join(batchDir, name),
+  );
+  for (const file of batchPngs)
+    await copyFile(await downloaded("qr-code.png"), file);
+  const svgFile = path.join(batchDir, "logo.svg");
+  await copyFile(await downloaded("qr-code.svg"), svgFile);
+  const text = (selector) =>
+    page.$eval(selector, (element) => element.textContent.trim());
+  // Simple mode can list several variants per MIME (JPEG, JPG, PJPEG...).
+  const selectTarget = async (mime, name) => {
+    await fill('input[placeholder="Search output formats..."]', mime);
+    const card = await page.waitForFunction(
+      (label) =>
+        Array.from(document.querySelectorAll(".format-card")).find(
+          (card) => card.querySelector(".name")?.textContent === label,
+        ),
+      { timeout: 20000 },
+      name,
+    );
+    await card.click();
+  };
+
+  await click("Start Over");
+  await page.waitForSelector(".drop-zone-batch");
+  assert.match(await text(".drop-zone-batch"), /several files at once/);
+  await (await page.$('input[type="file"]')).uploadFile(...batchPngs);
+  await page.waitForSelector(".selected-files-list");
+  assert.equal(await text(".drop-zone h2"), "3 files selected");
+  assert.equal(
+    await page.$$eval(".selected-file", (rows) => rows.length),
+    3,
+    "Every selected file should be listed",
+  );
+  assert.deepEqual(
+    await page.$$eval(".selected-files-format", (chips) =>
+      chips.map((chip) => chip.textContent.trim()),
+    ),
+    ["PNG ×3"],
+  );
+  await noOverflow();
+  await page.screenshot({
+    path: path.join(artifacts, "converter-batch-pick-mobile.png"),
+  });
+  await selectTarget("image/jpeg", "JPEG");
+  await page.waitForSelector(".convert-btn");
+  assert.equal(await text(".convert-btn"), "Convert 3 files to JPEG");
+  await click("Add or change output formats");
+  await selectTarget("image/webp", "WEBP");
+  await wait(
+    () =>
+      document.querySelectorAll('.format-card[aria-pressed="true"]').length ===
+      1,
+  );
+  assert.equal(await text(".convert-btn"), "Convert 3 files to 2 formats");
+  assert.match(await text(".convert-plan"), /3 × 2/);
+  assert.equal(
+    await page.$$eval(".summary .tag-remove", (buttons) =>
+      buttons.map((button) => button.getAttribute("aria-label")),
+    ).then((labels) => labels.join(",")),
+    "Remove JPEG,Remove WEBP",
+  );
+  await click("Show 3 files");
+  await page.waitForSelector(".summary-meta + .selected-files .selected-files-list");
+  await noOverflow();
+  await page.screenshot({
+    path: path.join(artifacts, "converter-batch-ready-mobile.png"),
+    fullPage: true,
+  });
+  await click("Convert 3 files to 2 formats");
+  await page.waitForSelector(".results-title", { timeout: 120000 });
+  assert.match(await text(".results-title"), /Complete/);
+  assert.equal(await text(".results-summary"), "6 files ready");
+  const resultNames = await page.$$eval(".result-name", (names) =>
+    names.map((name) => name.textContent),
+  );
+  assert.equal(resultNames.length, 6);
+  await noOverflow();
+  await page.screenshot({
+    path: path.join(artifacts, "converter-batch-results-mobile.png"),
+    fullPage: true,
+  });
+  await click("Download all as ZIP (6 files)");
+  const zip = await JSZip.loadAsync(
+    await readFile(await downloaded("converted-files.zip")),
+  );
+  const zipNames = Object.keys(zip.files).sort();
+  assert.deepEqual(zipNames, resultNames.slice().sort());
+  assert.equal(zipNames.filter((name) => name.endsWith(".jpeg") || name.endsWith(".jpg")).length, 3);
+  assert.equal(zipNames.filter((name) => name.endsWith(".webp")).length, 3);
+  const firstJpeg = await zip
+    .file(zipNames.find((name) => /\.jpe?g$/.test(name)))
+    .async("uint8array");
+  assert.deepEqual(Array.from(firstJpeg.subarray(0, 2)), [0xff, 0xd8]);
+
+  // ── mixed batch: each file keeps its own detected input format ──
+  await click("Start Over");
+  await page.setViewport({ width: 1440, height: 1100 });
+  await (await page.$('input[type="file"]')).uploadFile(batchPngs[0], svgFile);
+  await page.waitForSelector(".selected-files-list");
+  assert.match(await text(".drop-zone"), /Mixed batch: 2 input formats/);
+  assert.deepEqual(
+    await page.$$eval(".selected-file-meta", (metas) =>
+      metas.map((meta) => meta.textContent.split(" · ")[0]),
+    ),
+    ["PNG", "SVG"],
+  );
+  await selectTarget("image/jpeg", "JPEG");
+  assert.equal(await text(".convert-btn"), "Convert 2 files to JPEG");
+  assert.equal(await text(".summary .tag"), "2 files · PNG + SVG");
+  await noOverflow();
+  await page.screenshot({
+    path: path.join(artifacts, "converter-mixed-ready-desktop.png"),
+    fullPage: true,
+  });
+  await click("Convert 2 files to JPEG");
+  await page.waitForSelector(".results-title", { timeout: 120000 });
+  assert.equal(await text(".results-summary"), "2 files ready");
+  assert.deepEqual(
+    (
+      await page.$$eval(".result-name", (names) =>
+        names.map((name) => name.textContent),
+      )
+    ).sort(),
+    ["alpha.jpg", "logo.jpg"],
+  );
+  await page.screenshot({
+    path: path.join(artifacts, "converter-mixed-results-desktop.png"),
+    fullPage: true,
+  });
+  assert.deepEqual(errors, [], "Bulk conversion should not throw page errors");
+  console.log(
+    "PASS: same-type and mixed bulk conversion, multi-format output, ZIP download, file list, and narrow-screen layout.",
   );
 } finally {
   await browser.close();

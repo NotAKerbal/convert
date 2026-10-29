@@ -33,6 +33,12 @@ export function ToolIcon({
           <path d="M15 15h3v3h3v3h-6v-3m6-6v2M3 12h3m6-9v3m0 4v5m0 6v-3" />
         </>
       )}
+      {name === "units" && (
+        <>
+          <rect x="2.5" y="8" width="19" height="8" rx="1.5" />
+          <path d="M6.5 8v3m4-3v4.5m4-4.5v3m4-3v4.5" />
+        </>
+      )}
       {name === "text" && (
         <>
           <path d="M3 5h12M9 5v15M5 20h8m2-8h6m-3 0v8m-3 0h6" />
